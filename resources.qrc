@@ -1,0 +1,16 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/neko">
+        <file>src/Main.qml</file>
+        <file>Data/logo.png</file>
+        <file>Data/fonts/0xProtoNerdFont-Regular.ttf</file>
+        <file>Data/fonts/0xProtoNerdFont-Bold.ttf</file>
+        <file>Data/fonts/0xProtoNerdFont-Italic.ttf</file>
+        <file>Data/fonts/0xProtoNerdFontMono-Regular.ttf</file>
+        <file>Data/fonts/0xProtoNerdFontMono-Bold.ttf</file>
+        <file>Data/fonts/0xProtoNerdFontMono-Italic.ttf</file>
+        <file>Data/fonts/0xProtoNerdFontPropo-Regular.ttf</file>
+        <file>Data/fonts/0xProtoNerdFontPropo-Bold.ttf</file>
+        <file>Data/fonts/0xProtoNerdFontPropo-Italic.ttf</file>
+    </qresource>
+</RCC>

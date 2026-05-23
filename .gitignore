@@ -1,0 +1,33 @@
+# Build artifacts
+build/
+*.o
+*.a
+*.so
+/neko-kernel-manager
+Neko-Kernel-Manager
+moc_*.cpp
+qrc_*.cpp
+.qmake.stash
+Makefile
+Neko-Kernel-Manager.pro
+
+# Rust artifacts
+config-option-lib/target/
+rust/
+
+# IDE and System
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs and temporary files
+*.log
+meson-logs/
+meson-private/
+Resumen_Neko_Kernel_Manager.txt
+
+# Development
+Dockerfile
