@@ -1,0 +1,32 @@
+# Template file for 'neko-kernel-manager'
+pkgname=neko-kernel-manager
+version=1.2.0.0.3
+revision=2
+build_style=meson
+hostmakedepends="pkg-config qt6-tools qt6-declarative cargo meson"
+makedepends="qt6-base-devel qt6-declarative-devel fmt-devel"
+short_desc="Modern kernel manager for Void Linux"
+maintainer="ErzaGOD19 <gamingofdemon19@gmail.com>"
+license="GPL-2.0-only"
+homepage="https://github.com/javiercplus/Neko-Kernel-Manager"
+distfiles="https://github.com/javiercplus/Neko-Kernel-Manager/archive/refs/tags/${version}.tar.gz"
+checksum=dcbf8ae09ddf64ff95e405e5badb237287b17adabbbc8814c5101400655722eb
+
+post_extract() {
+	cd config-option-lib
+	mkdir -p .cargo
+	cargo vendor > .cargo/config.toml
+	cd ..
+
+	# 2. Generar el archivo .desktop que meson exige en la raíz
+	cat <<EOF > neko-kernel-manager.desktop
+[Desktop Entry]
+Type=Application
+Name=Neko Kernel Manager
+Comment=Modern kernel manager for Void Linux
+Exec=neko-kernel-manager
+Icon=neko-kernel-manager
+Terminal=false
+Categories=System;Settings;
+EOF
+}
