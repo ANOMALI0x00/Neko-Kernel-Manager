@@ -2,6 +2,14 @@
 
 ![Status](https://img.shields.io/badge/status-in--development-yellow)
 
+<img width="1089" height="695" alt="image" src="https://github.com/user-attachments/assets/7c38f199-b1e3-4502-8678-690b46ccb730" />
+
+<img width="1089" height="695" alt="image" src="https://github.com/user-attachments/assets/43bb6181-78da-4fc7-a9df-0c2906bd1c42" />
+
+<img width="1089" height="695" alt="image" src="https://github.com/user-attachments/assets/22d0b051-e896-428c-ae75-ce92afe890e3" />
+
+<img width="1039" height="517" alt="image" src="https://github.com/user-attachments/assets/2cbab0ea-bf2b-4c74-b87e-48989f88e0d1" />
+
 A comprehensive kernel manager for Void Linux, built with C++ (Qt6/QML) and Rust.
 
 > **Note**: This project is currently **under active development**. Features may change, and you might encounter bugs.
