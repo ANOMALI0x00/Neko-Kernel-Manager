@@ -1,0 +1,8 @@
+build/
+config-option-lib/target/
+rust/
+.git/
+*.o
+*.a
+*.tar.gz
+*.xbps

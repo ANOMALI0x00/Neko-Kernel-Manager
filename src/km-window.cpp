@@ -15,22 +15,20 @@
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setWindowTitle("Neko Kernel Manager");
     setupUI();
-    populateKernels();
 
     m_confWindow = std::make_unique<ConfWindow>(this);
 
     m_watcher = new QFutureWatcher<void>(this);
     connect(m_watcher, &QFutureWatcher<void>::finished, this, &MainWindow::onWorkFinished);
 
-    m_workerThread = new QThread(this);
-    m_worker = new Work([this]() { commitTransaction(); });
-    m_worker->moveToThread(m_workerThread);
-    connect(m_workerThread, &QThread::finished, m_worker, &QObject::deleteLater);
+    m_kernelWatcher = new QFutureWatcher<std::vector<Kernel>>(this);
+    connect(m_kernelWatcher, &QFutureWatcher<std::vector<Kernel>>::finished, this, &MainWindow::onKernelsLoaded);
+
+    loadKernelList();
 }
 
 MainWindow::~MainWindow() {
-    m_workerThread->quit();
-    m_workerThread->wait();
+    // Resources are parented; nothing special to do here.
 }
 
 void MainWindow::setupUI() {
@@ -91,9 +89,16 @@ void MainWindow::setupUI() {
     layout->addWidget(m_progressBar);
 }
 
-void MainWindow::populateKernels() {
+void MainWindow::loadKernelList() {
     m_treeWidget->clear();
-    m_kernels = Kernel::getKernels();
+    m_treeWidget->setEnabled(false);
+    m_progressBar->setVisible(true);
+    m_kernelWatcher->setFuture(QtConcurrent::run(&Kernel::getKernels));
+}
+
+void MainWindow::populateKernels(const std::vector<Kernel> &kernels) {
+    m_treeWidget->clear();
+    m_kernels = kernels;
 
     if (m_kernels.empty() && !utils::commandExists("xbps-query")) {
         QMessageBox::warning(this, "Missing xbps", "xbps-query is not installed or not available in PATH. Void kernel management is disabled.");
@@ -109,6 +114,13 @@ void MainWindow::populateKernels() {
     }
 }
 
+void MainWindow::onKernelsLoaded() {
+    std::vector<Kernel> kernels = m_kernelWatcher->future().result();
+    m_treeWidget->setEnabled(true);
+    m_progressBar->setVisible(false);
+    populateKernels(kernels);
+}
+
 void MainWindow::onInstall() {
     m_toInstall.clear();
     for (int i = 0; i < m_treeWidget->topLevelItemCount(); ++i) {
@@ -119,7 +131,7 @@ void MainWindow::onInstall() {
     }
     if (!m_toInstall.empty()) {
         m_progressBar->setVisible(true);
-        m_watcher->setFuture(QtConcurrent::run([this]() { m_worker->doWork(); }));
+        m_watcher->setFuture(QtConcurrent::run([this]() { commitTransaction(); }));
     }
 }
 
@@ -133,12 +145,12 @@ void MainWindow::onRemove() {
     }
     if (!m_toRemove.empty()) {
         m_progressBar->setVisible(true);
-        m_watcher->setFuture(QtConcurrent::run([this]() { m_worker->doWork(); }));
+        m_watcher->setFuture(QtConcurrent::run([this]() { commitTransaction(); }));
     }
 }
 
 void MainWindow::onRefresh() {
-    populateKernels();
+    loadKernelList();
 }
 
 void MainWindow::onConfigure() {
@@ -187,7 +199,7 @@ void MainWindow::onDownload() {
         const QString cmd = QString("xbps-install -y %1").arg(variant);
         utils::runCommand(cmd.toStdString());
         QMessageBox::information(this, "Install", QStringLiteral("Installed %1 from Void repos.").arg(variant));
-        populateKernels();
+        loadKernelList();
         return;
     }
 
@@ -228,22 +240,18 @@ void MainWindow::onDownload() {
 
 void MainWindow::onWorkFinished() {
     m_progressBar->setVisible(false);
-    populateKernels();
+    loadKernelList();
     QMessageBox::information(this, "Done", "Operation completed.");
 }
-
-void Work::doWork() {
-    if (m_func) {
-        m_func();
-    }
-}
-
 void MainWindow::commitTransaction() {
     if (!m_toInstall.empty()) {
         std::vector<std::string> fullInstallList;
         for (const auto& pkg : m_toInstall) {
             fullInstallList.push_back(pkg);
-            fullInstallList.push_back(pkg + "-headers");
+            std::string headersPkg = pkg + "-headers";
+            if (utils::packageExists(headersPkg)) {
+                fullInstallList.push_back(headersPkg);
+            }
         }
         std::string cmd = "pkexec xbps-install -y " + utils::join(fullInstallList, " ");
         utils::runCommand(cmd);
@@ -252,7 +260,10 @@ void MainWindow::commitTransaction() {
         std::vector<std::string> fullRemoveList;
         for (const auto& pkg : m_toRemove) {
             fullRemoveList.push_back(pkg);
-            fullRemoveList.push_back(pkg + "-headers");
+            std::string headersPkg = pkg + "-headers";
+            if (utils::packageInstalled(headersPkg)) {
+                fullRemoveList.push_back(headersPkg);
+            }
         }
         std::string cmd = "pkexec xbps-remove -y " + utils::join(fullRemoveList, " ");
         utils::runCommand(cmd);

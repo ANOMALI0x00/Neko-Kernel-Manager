@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Neko Kernel Manager
+Comment=Kernel manager with easy optimization and simplified workflow
+Exec=neko-kernel-manager
+Icon=neko-kernel-manager
+Terminal=false
+Type=Application
+Categories=System;Settings;
+Keywords=kernel;manager;void;
