@@ -1,4 +1,6 @@
 #include <QApplication>
+#include <QTranslator>
+#include <QLocale>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QIcon>
@@ -35,6 +37,27 @@ int main(int argc, char *argv[]) {
 
     // Set default font
     app.setFont(QFont("0xProto Nerd Font", 10));
+
+    QTranslator translator;
+    QString translationsPath = QCoreApplication::applicationDirPath() + "/translations";
+    QLocale systemLocale = QLocale::system();
+    bool translationLoaded = false;
+
+    translationLoaded = translator.load(systemLocale, "app", "_", translationsPath);
+    if (!translationLoaded) {
+        translationLoaded = translator.load(systemLocale, "app", "_", ":/i18n");
+    }
+    if (!translationLoaded) {
+        QString shortLocale = systemLocale.name().section('_', 0, 0);
+        translationLoaded = translator.load(QString("app_%1").arg(shortLocale), translationsPath);
+    }
+    if (!translationLoaded) {
+        QString shortLocale = systemLocale.name().section('_', 0, 0);
+        translationLoaded = translator.load(QString("app_%1").arg(shortLocale), ":/i18n");
+    }
+    if (translationLoaded) {
+        app.installTranslator(&translator);
+    }
 
     // Force a dark palette to prevent black text issues (User solution part 3-ish)
     QPalette darkPalette;

@@ -31,3 +31,9 @@ Resumen_Neko_Kernel_Manager.txt
 
 # Development
 Dockerfile
+
+# Excluir infraestructura y dependencias externas
+.dockerignore
+Dockerfile.*
+*.sh
+subprojects/corrosion/

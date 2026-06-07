@@ -6,12 +6,10 @@
 #include <QPushButton>
 #include <QProgressBar>
 #include <QFutureWatcher>
-#include <QThread>
 #include <QLineEdit>
 #include <QComboBox>
 #include <QLabel>
 
-#include <functional>
 #include <vector>
 #include <memory>
 
@@ -40,20 +38,6 @@ private:
     Package m_headers;
 };
 
-class Work : public QObject {
-    Q_OBJECT
-public:
-    using function_t = std::function<void()>;
-    explicit Work(function_t func) : m_func(std::move(func)) {}
-    ~Work() = default;
-
-public slots:
-    void doWork();
-
-private:
-    function_t m_func;
-};
-
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
@@ -72,10 +56,12 @@ private slots:
 
 private:
     void setupUI();
-    void populateKernels();
+    void populateKernels(const std::vector<Kernel> &kernels);
+    void loadKernelList();
     void commitTransaction();
     void loadKernelOrgVersions();
     void updateDownloadWidgets();
+    void onKernelsLoaded();
 
     QTreeWidget *m_treeWidget;
     QPushButton *m_installButton;
@@ -96,8 +82,7 @@ private:
     std::unique_ptr<ConfWindow> m_confWindow;
 
     QFutureWatcher<void> *m_watcher;
-    QThread *m_workerThread;
-    Work *m_worker;
+    QFutureWatcher<std::vector<Kernel>> *m_kernelWatcher;
 };
 
 #endif // KM_WINDOW_HPP
