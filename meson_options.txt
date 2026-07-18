@@ -1,0 +1,1 @@
+# No custom options needed for now as buildtype is a built-in meson option.
