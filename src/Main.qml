@@ -9,40 +9,59 @@ ApplicationWindow
     visible: true
     width: 1100
     height: 800
-    minimumWidth: 900
-    minimumHeight: 700
+    minimumWidth: 560
+    minimumHeight: 440
     title: "Neko Kernel Manager"
     Material.theme: Material.Dark
-    Material.accent: palette.green
+    Material.accent: palette.accent
     Material.primary: palette.bg
+    font.family: "Inter"
 
     color: "transparent"
     flags: Qt.Window | Qt.FramelessWindowHint
 
+    // Neko Wizard theme — minimal / flat / sharp.
+    //   Every colour derives from the system theme (`theme`, fed by Noctalia /
+    //   matugen / pywal / libadwaita) so the whole app repaints coherently when
+    //   the theme changes. Neutral tokens are mixed from the base colours with the
+    //   same ratios Neko Wizard's CSS uses, so they render correctly for light or
+    //   dark themes alike. Legacy names are kept as single-accent / error aliases.
     QtObject
     {
         id: palette
-        readonly property color bg: "#1e1e2e"
-        readonly property color surface: "#25263a"
-        readonly property color currentLine: "#313244"
-        readonly property color selection: "#45475a"
-        readonly property color fg: "#cdd6f4"
-        readonly property color comment: "#7f849c"
-        readonly property color cyan: "#89dceb"
-        readonly property color green: "#a6e3a1"
-        readonly property color orange: "#fab387"
-        readonly property color pink: "#f5c2e7"
-        readonly property color purple: "#cba6f7"
+        // linear blend of two colours, t in [0,1] (Neko Wizard's mix())
+        function mix(a, b, t) { return Qt.rgba(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, 1.0) }
+
+        readonly property color bg: theme.windowBg
+        readonly property color surface: theme.cardBg
+        readonly property color surfaceHi: mix(theme.cardBg, theme.windowFg, 0.07)   // hover fill
+        readonly property color currentLine: mix(theme.windowBg, theme.windowFg, 0.14) // border
+        readonly property color borderHi: mix(theme.windowBg, theme.windowFg, 0.28)  // border hover
+        readonly property color selection: mix(theme.cardBg, theme.windowFg, 0.07)
+        readonly property color fg: theme.windowFg                                    // text
+        readonly property color textSoft: mix(theme.windowFg, theme.windowBg, 0.25)
+        readonly property color comment: mix(theme.windowFg, theme.windowBg, 0.45)   // text_dim
+        readonly property color accent: theme.accentBg
+        readonly property color accentHi: mix(theme.accentBg, theme.windowFg, 0.20)
+        readonly property color accentFg: theme.accentFg
+        readonly property color error: theme.errorBg
+        // Legacy aliases → collapsed onto the neutral + single-accent scheme
+        readonly property color cyan: theme.accentBg
+        readonly property color green: theme.accentBg
+        readonly property color orange: theme.accentBg
+        readonly property color pink: theme.errorBg
+        readonly property color purple: theme.accentBg
     }
 
+    // Title-bar controls (monochrome; close keeps the theme's error red)
     QtObject
     {
         id: dracula
-        readonly property color bg: "#282a36"
-        readonly property color purple: "#bd93f9"
-        readonly property color red: "#ff5555"
-        readonly property color yellow: "#f1fa8c"
-        readonly property color green: "#50fa7b"
+        readonly property color bg: theme.headerbarBg
+        readonly property color purple: theme.accentBg
+        readonly property color red: theme.errorBg      // close
+        readonly property color yellow: palette.comment // maximize
+        readonly property color green: palette.comment  // minimize
     }
 
     // Main Border and Background
@@ -50,9 +69,9 @@ ApplicationWindow
     {
         anchors.fill: parent
         color: palette.bg
-        border.color: dracula.purple
-        border.width: 2
-        radius: 4
+        border.color: palette.currentLine
+        border.width: 1
+        radius: 0
 
         ColumnLayout
         {
@@ -60,21 +79,19 @@ ApplicationWindow
             anchors.margins: 2
             spacing: 0
 
-            // Custom Dracula Title Bar
+            // Header bar
             Rectangle
             {
                 Layout.fillWidth: true
-                height: 35
+                height: 36
                 color: dracula.bg
-                radius: 4
 
-                // Keep bottom corners square for the title bar
+                // Bottom divider (borders-only depth)
                 Rectangle
                 {
                     anchors.bottom: parent.bottom
-                    width: parent.width; height: 10
-                    color: parent.color
-                    visible: true
+                    width: parent.width; height: 1
+                    color: palette.currentLine
                 }
 
                 MouseArea
@@ -98,10 +115,11 @@ ApplicationWindow
 
                     Text
                     {
-                        text: qsTr("󰄛  Neko Kernel Manager")
-                        color: dracula.purple
+                        text: qsTr("Neko Kernel Manager")
+                        color: palette.comment
                         font.pixelSize: 12
-                        font.bold: true
+                        font.weight: Font.Medium
+                        font.letterSpacing: 0.4
                     }
 
                     Item
@@ -111,13 +129,13 @@ ApplicationWindow
 
                     Row
                     {
-                        spacing: 10
+                        spacing: 8
                         Layout.alignment: Qt.AlignVCenter
 
                         // Minimize
                         Rectangle
                         {
-                            width: 12; height: 12; radius: 6; color: dracula.green
+                            width: 12; height: 12; radius: 0; color: dracula.green
                             MouseArea
                             {
                                 anchors.fill: parent; onClicked: window.showMinimized()
@@ -126,7 +144,7 @@ ApplicationWindow
                         // Maximize
                         Rectangle
                         {
-                            width: 12; height: 12; radius: 6; color: dracula.yellow
+                            width: 12; height: 12; radius: 0; color: dracula.yellow
                             MouseArea
                             {
                                 anchors.fill: parent; onClicked: window.visibility === Window.Maximized ? window.showNormal() : window.showMaximized()
@@ -135,7 +153,7 @@ ApplicationWindow
                         // Close
                         Rectangle
                         {
-                            width: 12; height: 12; radius: 6; color: dracula.red
+                            width: 12; height: 12; radius: 0; color: dracula.red
                             MouseArea
                             {
                                 anchors.fill: parent; onClicked: window.close()
@@ -145,7 +163,7 @@ ApplicationWindow
                 }
             }
 
-            // Original Catppuccin Interface
+            // Main content surface (flat — borders only, no gradients)
             Item
             {
                 Layout.fillWidth: true
@@ -154,114 +172,122 @@ ApplicationWindow
                 Rectangle
                 {
                     anchors.fill: parent
-                    gradient: Gradient
-                    {
-                        GradientStop
-                        {
-                            position: 0; color: palette.surface
-                        }
-                        GradientStop
-                        {
-                            position: 1; color: palette.bg
-                        }
-                    }
+                    color: palette.bg
                 }
 
                 ColumnLayout
                 {
                     anchors.fill: parent
-                    anchors.margins: 25
-                    spacing: 20
+                    anchors.margins: 16
+                    spacing: 12
 
-                    // Top Bar
+                    // Top Bar: brand · navigation · status
                     RowLayout
                     {
                         Layout.fillWidth: true
-                        spacing: 20
+                        spacing: 12
 
+                        // Brand
+                        Image
+                        {
+                            id: logoImage; source: "qrc:/neko/Data/logo.png"
+                            Layout.preferredWidth: 32; Layout.preferredHeight: 32
+                            sourceSize: Qt.size(64, 64); smooth: true
+                        }
+                        Text
+                        {
+                            id: mainTitle
+                            text: "Neko Kernel Manager"
+                            color: palette.fg
+                            font.pixelSize: 17; font.weight: Font.Bold; font.letterSpacing: -0.3
+                            visible: window.width >= 760   // hide brand text when space is tight
+                        }
+
+                        Item { Layout.fillWidth: true }
+
+                        // Primary navigation — clearly clickable segmented tabs
                         Row
                         {
-                            spacing: 12
-                            Item
-                            {
-                                width: 56; height: 56; anchors.verticalCenter: parent.verticalCenter
-                                Image
-                                {
-                                    id: logoImage; source: "qrc:/neko/Data/logo.png"
-                                    anchors.fill: parent; sourceSize: Qt.size(112, 112); smooth: true
-                                }
-                            }
-
-                            Canvas
-                            {
-                                id: mainTitle; width: 280; height: 40; anchors.verticalCenter: parent.verticalCenter
-                                property color color1: palette.green
-                                property color color2: palette.purple
-                                onPaint:
-                                {
-                                    var ctx = getContext("2d"); ctx.clearRect(0, 0, width, height);
-                                    var gradient = ctx.createLinearGradient(0, 0, width, 0);
-                                    gradient.addColorStop(0.0, color1); gradient.addColorStop(1.0, color2);
-                                    ctx.fillStyle = gradient; ctx.font = "bold 24px '0xProto Nerd Font'";
-                                    ctx.textBaseline = "middle"; ctx.fillText("Neko Kernel Manager", 0, height / 2);
-                                }
-                                Component.onCompleted: requestPaint()
-                            }
-                        }
-
-                        RowLayout
-                        {
-                            spacing: 30; Layout.leftMargin: 60
+                            spacing: 8
                             Repeater
                             {
-                                model: ["XBPS Kernels", "Downloads", "Build & Config"]
-                                Text
+                                model: [
+                                    { label: qsTr("Kernels"),   tip: qsTr("Install, remove and purge Void kernels") },
+                                    { label: qsTr("Downloads"), tip: qsTr("Fetch kernels from kernel.org or a Git repo") },
+                                    { label: qsTr("Build"),     tip: qsTr("Configure and build a custom kernel") }
+                                ]
+                                Rectangle
                                 {
-                                    text: modelData
-                                    color: mainStack.currentIndex === index ? palette.green : palette.comment
-                                    font.pixelSize: 15; font.bold: mainStack.currentIndex === index
-                                    Rectangle
+                                    readonly property bool active: mainStack.currentIndex === index
+                                    width: navLabel.implicitWidth + 24; height: 30
+                                    color: active ? palette.accent : (navHover.hovered ? palette.surfaceHi : palette.surface)
+                                    border.width: 1
+                                    border.color: active ? palette.accent : (navHover.hovered ? palette.borderHi : palette.currentLine)
+
+                                    Text
                                     {
-                                        anchors.top: parent.bottom; anchors.topMargin: 4
-                                        width: parent.width; height: 2; color: palette.green
-                                        visible: mainStack.currentIndex === index
+                                        id: navLabel
+                                        anchors.centerIn: parent
+                                        text: modelData.label
+                                        color: active ? palette.accentFg : (navHover.hovered ? palette.fg : palette.textSoft)
+                                        font.pixelSize: 13
+                                        font.weight: active ? Font.DemiBold : Font.Medium
                                     }
+
+                                    HoverHandler { id: navHover }
+                                    ToolTip.text: modelData.tip
+                                    ToolTip.visible: navHover.hovered
+                                    ToolTip.delay: 500
                                     MouseArea
                                     {
-                                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: mainStack.currentIndex = index
+                                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                        onClicked: mainStack.currentIndex = index
                                     }
                                 }
                             }
                         }
 
-                        Item
-                        {
-                            Layout.fillWidth: true
-                        }
+                        Item { Layout.fillWidth: true }
 
-                        Rectangle
+                        // Status pill
+                        Row
                         {
-                            width: 14; height: 14; radius: 7
-                            color: bridge.busy ? palette.orange : palette.green
+                            spacing: 8
                             Rectangle
                             {
-                                anchors.centerIn: parent; width: 24; height: 24; radius: 12
-                                color: parent.color; opacity: 0.2
-                                visible: bridge.busy
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 8; height: 8; radius: 0
+                                color: bridge.busy ? palette.accent : palette.comment
+                            }
+                            Text
+                            {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: bridge.busy ? qsTr("Working") : qsTr("Ready")
+                                color: palette.textSoft; font.pixelSize: 12; font.weight: Font.Medium
+                                visible: window.width >= 680   // dot alone stays when narrow
                             }
                         }
 
+                        // Logs
                         Button
                         {
-                            id: logBtn; Layout.leftMargin: 5
+                            id: logBtn; Layout.leftMargin: 4
+                            hoverEnabled: true
                             contentItem: Text
                             {
-                                text: "󰋗"; color: palette.fg; font.pixelSize: 18; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                                text: qsTr("Logs"); color: logBtn.hovered ? palette.fg : palette.textSoft
+                                font.pixelSize: 12; font.weight: Font.Medium
+                                horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                             }
                             background: Rectangle
                             {
-                                implicitWidth: 32; implicitHeight: 32; radius: 16; color: "transparent"
+                                implicitWidth: 62; implicitHeight: 30; radius: 0
+                                color: logBtn.hovered ? palette.surfaceHi : palette.surface
+                                border.color: logBtn.hovered ? palette.borderHi : palette.currentLine
                             }
+                            ToolTip.text: qsTr("System logs & operations")
+                            ToolTip.visible: hovered
+                            ToolTip.delay: 500
                             onClicked: logModal.open()
                         }
                     }
@@ -270,10 +296,10 @@ ApplicationWindow
                     ColumnLayout
                     {
                         Layout.fillWidth: true
-                        Layout.leftMargin: 25
-                        Layout.rightMargin: 25
+                        Layout.leftMargin: 14
+                        Layout.rightMargin: 14
                         Layout.topMargin: 2
-                        Layout.bottomMargin: 8
+                        Layout.bottomMargin: 6
                         visible: bridge.busy || bridge.progress > 0
                         spacing: 4
 
@@ -298,14 +324,15 @@ ApplicationWindow
                             }
                         }
 
-                        // Custom Progress Bar with Gradient (Refined thickness)
+                        // Progress bar — flat: bordered trough, solid accent fill
                         Rectangle
                         {
                             id: globalProgressBarBg
                             Layout.fillWidth: true
-                            height: 6
-                            color: "#16161e"
-                            radius: 3
+                            height: 4
+                            color: palette.surface
+                            border.color: palette.currentLine
+                            radius: 0
                             clip: true
 
                             Rectangle
@@ -313,61 +340,14 @@ ApplicationWindow
                                 id: globalProgressBarFill
                                 width: parent.width * (bridge.progress / 100.0)
                                 height: parent.height
-                                radius: 3
-
-                                gradient: Gradient
-                                {
-                                    orientation: Gradient.Horizontal
-                                    GradientStop
-                                    {
-                                        position: 0.0; color: "#cba6f7"
-                                    }
-                                    // Purple
-                                    GradientStop
-                                    {
-                                        position: 1.0; color: "#a6e3a1"
-                                    }
-                                    // Green
-                                }
+                                radius: 0
+                                color: palette.accent
 
                                 Behavior on width
                                 {
                                     NumberAnimation
                                     {
                                         duration: 300; easing.type: Easing.OutCubic
-                                    }
-                                }
-
-                                // Animated shine effect
-                                Rectangle
-                                {
-                                    width: 40; height: parent.height
-                                    gradient: Gradient
-                                    {
-                                        orientation: Gradient.Horizontal
-                                        GradientStop
-                                        {
-                                            position: 0.0; color: "transparent"
-                                        }
-                                        GradientStop
-                                        {
-                                            position: 0.5; color: "white"
-                                        }
-                                        GradientStop
-                                        {
-                                            position: 1.0; color: "transparent"
-                                        }
-                                    }
-                                    opacity: 0.2
-                                    x: -40
-                                    SequentialAnimation on x
-                                    {
-                                        loops: Animation.Infinite
-                                        running: bridge.busy
-                                        NumberAnimation
-                                        {
-                                            from: -40; to: globalProgressBarFill.width + 40; duration: 1500
-                                        }
                                     }
                                 }
                             }
@@ -382,42 +362,63 @@ ApplicationWindow
                         // 0: XBPS Kernels View
                         ColumnLayout
                         {
-                            spacing: 12
+                            spacing: 8
                             Layout.fillWidth: true; Layout.fillHeight: true
                             RowLayout
                             {
                                 Layout.fillWidth: true
+                                spacing: 12
                                 ColumnLayout
                                 {
+                                    Layout.fillWidth: true
                                     spacing: 2
                                     Text
                                     {
-                                        text: qsTr("Official Void Repositories"); color: palette.fg; font.bold: true; font.pixelSize: 16
+                                        text: qsTr("Installed & Available Kernels"); color: palette.fg; font.pixelSize: 16; font.weight: Font.Bold; font.letterSpacing: -0.2
+                                        Layout.fillWidth: true; elide: Text.ElideRight
                                     }
                                     Text
                                     {
-                                        text: qsTr("Manage binary kernels and custom manual installations. Clean old kernels with vkpurge.")
-                                        color: palette.comment; font.pixelSize: 10; font.italic: true
+                                        text: qsTr("Install or remove kernels from the official Void repositories, or purge old versions.")
+                                        color: palette.comment; font.pixelSize: 11
+                                        Layout.fillWidth: true; wrapMode: Text.WordWrap; maximumLineCount: 2; elide: Text.ElideRight
                                     }
                                 }
-                                Item
+
+                                // Search / filter
+                                TextField
                                 {
-                                    Layout.fillWidth: true
+                                    id: kernelSearch
+                                    Layout.preferredWidth: 220; Layout.minimumWidth: 120
+                                    placeholderText: qsTr("Search kernels…")
+                                    color: palette.fg; font.pixelSize: 12
+                                    verticalAlignment: TextInput.AlignVCenter
+                                    leftPadding: 10; rightPadding: 10
+                                    background: Rectangle
+                                    {
+                                        implicitHeight: 28; radius: 0
+                                        color: palette.bg
+                                        border.color: kernelSearch.activeFocus ? palette.accent : palette.currentLine
+                                    }
                                 }
 
                                 Button
                                 {
                                     id: purgeBtn; text: qsTr("Purge Old Kernels"); enabled: !bridge.busy
+                                    hoverEnabled: true
+                                    ToolTip.text: qsTr("Remove old, unused kernel versions (vkpurge) to free disk space")
+                                    ToolTip.visible: hovered
+                                    ToolTip.delay: 500
                                     contentItem: Text
                                     {
-                                        text: purgeBtn.text; font.bold: true; font.pixelSize: 11; color: purgeBtn.enabled ? "#1e1e2e" : palette.comment; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                                        text: purgeBtn.text; font.bold: true; font.pixelSize: 11; color: purgeBtn.enabled ? palette.accentFg : palette.comment; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                                     }
                                     background: Rectangle
                                     {
-                                        implicitHeight: 32; implicitWidth: 140; radius: 8
+                                        implicitHeight: 28; implicitWidth: 140; radius: 0
                                         color: !purgeBtn.enabled ? palette.currentLine :
-                                        (purgeArea.pressed ? Qt.darker("#fa8072", 1.2) :
-                                        (purgeArea.containsMouse ? Qt.lighter("#fa8072", 1.1) : "#fa8072"))
+                                        (purgeArea.pressed ? Qt.darker(palette.error, 1.2) :
+                                        (purgeArea.containsMouse ? Qt.lighter(palette.error, 1.1) : palette.error))
 
                                         MouseArea
                                         {
@@ -431,480 +432,525 @@ ApplicationWindow
                                 }
                             }
 
-                            ScrollView
+                            // Kernel grid with empty / loading state
+                            Item
                             {
                                 Layout.fillWidth: true; Layout.fillHeight: true
-                                clip: true
 
-                                GridView
+                                ScrollView
                                 {
-                                    id: kernelGrid
-                                    width: parent.width; height: contentHeight
-                                    Layout.margins: 10
-                                    cellWidth: width > 100 ? (width >= 600 ? width / 4 : (width >= 400 ? width / 3 : (width >= 300 ? width / 2 : width))) : 140
-                                    cellHeight: 165
-                                    model: bridge.kernels
-                                    interactive: false // ScrollView handles interaction
+                                    id: kernelScroll
+                                    anchors.fill: parent
+                                    clip: true
+                                    ScrollBar.vertical.policy: ScrollBar.AsNeeded
+                                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
-                                    delegate: Rectangle
+                                    GridView
                                     {
-                                        id: kernelDelegate
-                                        width: kernelGrid.cellWidth - 10; height: kernelGrid.cellHeight - 10
-                                        radius: 10
-                                        color: palette.surface
-                                        // Priority of borders:
-                                        // 1. Purple if selected (sourceTemplate)
-                                        // 2. Green if target of build (targetTemplate)
-                                        // 3. Orange if manual
-                                        // 4. Default currentLine
-                                        border.color: bridge.sourceTemplate === modelData.name ? palette.purple :
-                                        (bridge.targetTemplate === modelData.name ? palette.green :
-                                        (modelData.type === "manual" ? palette.orange : palette.currentLine))
-                                        border.width: (bridge.sourceTemplate === modelData.name || bridge.targetTemplate === modelData.name) ? 2 : 1
+                                        id: kernelGrid
+                                        // Constrain to the real viewport so columns never overflow
+                                        width: kernelScroll.availableWidth; height: contentHeight
+                                        // Responsive: aim for ~200px cards, add columns as the window grows
+                                        cellWidth: width / Math.max(1, Math.floor(width / 200))
+                                        cellHeight: 132
+                                        model: kernelSearch.text.trim().length === 0 ? bridge.kernels
+                                               : bridge.kernels.filter(function(k) { return (k.name || "").toLowerCase().indexOf(kernelSearch.text.trim().toLowerCase()) !== -1 })
+                                        interactive: false // ScrollView handles interaction
 
-                                        HoverHandler
+                                        delegate: Rectangle
                                         {
-                                            id: hoverHandler
-                                        }
+                                            id: kernelDelegate
+                                            width: kernelGrid.cellWidth - 10; height: kernelGrid.cellHeight - 10
+                                            radius: 0
+                                            color: palette.surface
+                                            // Priority of borders:
+                                            // 1. Purple if selected (sourceTemplate)
+                                            // 2. Green if target of build (targetTemplate)
+                                            // 3. Orange if manual
+                                            // 4. Default currentLine
+                                            border.color: bridge.sourceTemplate === modelData.name ? palette.purple :
+                                            (bridge.targetTemplate === modelData.name ? palette.green :
+                                            palette.currentLine)
+                                            border.width: (bridge.sourceTemplate === modelData.name || bridge.targetTemplate === modelData.name) ? 2 : 1
 
-                                        MouseArea
-                                        {
-                                            anchors.fill: parent
-                                            onClicked:
+                                            HoverHandler
                                             {
-                                                bridge.sourceTemplate = modelData.name
-
-                                                // Prepare targetTemplate name based on selection
-                                                var finalName = "neko-kernel"
-                                                var parts = modelData.name.split("-")
-
-                                                if (parts.length > 1 && parts[0] === "linux") {
-                                                    if (parts[1] === "lts" || parts[1] === "zen" || parts[1] === "rt" || parts[1] === "mainline") {
-                                                        finalName += "-" + parts[1] + "-" + parts.slice(2).join("-")
-                                                    } else {
-                                                        finalName += "-" + parts.slice(1).join("-")
-                                                    }
-                                                } else {
-                                                    finalName = modelData.name
-                                                }
-
-                                                bridge.targetTemplate = finalName
+                                                id: hoverHandler
                                             }
-                                        }
 
-                                        ColumnLayout
-                                        {
-                                            anchors.centerIn: parent
-                                            width: parent.width - 16
-                                            spacing: 6
-
-                                            Rectangle
+                                            MouseArea
                                             {
-                                                Layout.alignment: Qt.AlignHCenter
-                                                width: 38; height: 38; radius: 19
-                                                color: palette.bg
-                                                Image
+                                                anchors.fill: parent
+                                                onClicked:
                                                 {
-                                                    anchors.centerIn: parent
-                                                    source: "qrc:/neko/Data/logo.png"
-                                                    width: 22; height: 22; fillMode: Image.PreserveAspectFit
-                                                }
-                                                Rectangle
-                                                {
-                                                    anchors.bottom: parent.bottom; anchors.right: parent.right
-                                                    width: 12; height: 12; radius: 6; color: modelData.type === "manual" ? palette.orange : palette.green
-                                                    border.color: palette.bg; border.width: 2
+                                                    bridge.sourceTemplate = modelData.name
+
+                                                    // Prepare targetTemplate name based on selection
+                                                    var finalName = "neko-kernel"
+                                                    var parts = modelData.name.split("-")
+
+                                                    if (parts.length > 1 && parts[0] === "linux") {
+                                                        if (parts[1] === "lts" || parts[1] === "zen" || parts[1] === "rt" || parts[1] === "mainline") {
+                                                            finalName += "-" + parts[1] + "-" + parts.slice(2).join("-")
+                                                        } else {
+                                                            finalName += "-" + parts.slice(1).join("-")
+                                                        }
+                                                    } else {
+                                                        finalName = modelData.name
+                                                    }
+
+                                                    bridge.targetTemplate = finalName
                                                 }
                                             }
 
                                             ColumnLayout
                                             {
-                                                Layout.fillWidth: true; spacing: 1
-                                                Text
-                                                {
-                                                    text: modelData.name
-                                                    color: palette.fg; font.bold: true; font.pixelSize: 11
-                                                    Layout.alignment: Qt.AlignHCenter; Layout.fillWidth: true
-                                                    horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
-                                                }
-                                                Text
-                                                {
-                                                    text: modelData.type === "manual" ? "Custom Installation" : modelData.version
-                                                    color: modelData.type === "manual" ? palette.orange : palette.comment
-                                                    font.pixelSize: 9
-                                                    Layout.alignment: Qt.AlignHCenter; Layout.fillWidth: true
-                                                    horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
-                                                }
-                                            }
+                                                anchors.centerIn: parent
+                                                width: parent.width - 16
+                                                spacing: 6
 
-                                            Item
-                                            {
-                                                Layout.alignment: Qt.AlignHCenter
-                                                Layout.preferredWidth: 85; Layout.preferredHeight: 26
-                                                property bool isActive: modelData.installed && (bridge.activeKernelVersion === modelData.version || bridge.activeKernelVersion.includes(modelData.version))
-
-                                                // Running Indicator (Non-actionable)
                                                 Rectangle
                                                 {
-                                                    anchors.fill: parent
-                                                    visible: parent.isActive
-                                                    radius: 5; color: "transparent"; border.color: "#fab387"; border.width: 1
-                                                    Text
+                                                    Layout.alignment: Qt.AlignHCenter
+                                                    width: 38; height: 38; radius: 0
+                                                    color: palette.bg
+                                                    Image
                                                     {
                                                         anchors.centerIn: parent
-                                                        text: qsTr("Running"); font.bold: true; font.pixelSize: 10; color: "#fab387"
+                                                        source: "qrc:/neko/Data/logo.png"
+                                                        width: 22; height: 22; fillMode: Image.PreserveAspectFit
+                                                    }
+                                                    Rectangle
+                                                    {
+                                                        anchors.bottom: parent.bottom; anchors.right: parent.right
+                                                        width: 12; height: 12; radius: 0; color: modelData.type === "manual" ? palette.accent : palette.comment
+                                                        border.color: palette.bg; border.width: 2
                                                     }
                                                 }
 
-                                                // Action Button (Install/Remove)
-                                                Button
+                                                ColumnLayout
                                                 {
-                                                    id: actionBtn
-                                                    anchors.fill: parent
-                                                    visible: !parent.isActive
-                                                    text: modelData.installed ? "Remove" : "Install"
-                                                    enabled: !bridge.busy
-                                                    contentItem: Text
+                                                    Layout.fillWidth: true; spacing: 1
+                                                    Text
                                                     {
-                                                        text: actionBtn.text; font.bold: true; font.pixelSize: 10
-                                                        color: !actionBtn.enabled ? palette.comment : palette.bg
-                                                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                                                        text: modelData.name
+                                                        color: palette.fg; font.bold: true; font.pixelSize: 11
+                                                        Layout.alignment: Qt.AlignHCenter; Layout.fillWidth: true
+                                                        horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
                                                     }
-                                                    background: Rectangle
+                                                    Text
                                                     {
-                                                        radius: 5
-                                                        color: !actionBtn.enabled ? palette.currentLine : (modelData.installed ? palette.pink : palette.green)
+                                                        text: modelData.type === "manual" ? "Custom Installation" : modelData.version
+                                                        color: modelData.type === "manual" ? palette.orange : palette.comment
+                                                        font.pixelSize: 9
+                                                        Layout.alignment: Qt.AlignHCenter; Layout.fillWidth: true
+                                                        horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
                                                     }
-                                                    onClicked: modelData.installed ? bridge.removeKernel(modelData.name) : bridge.installKernel(modelData.name)
+                                                }
+
+                                                Item
+                                                {
+                                                    Layout.alignment: Qt.AlignHCenter
+                                                    Layout.preferredWidth: 85; Layout.preferredHeight: 26
+                                                    property bool isActive: modelData.installed && (bridge.activeKernelVersion === modelData.version || bridge.activeKernelVersion.includes(modelData.version))
+
+                                                    // Running Indicator (Non-actionable)
+                                                    Rectangle
+                                                    {
+                                                        anchors.fill: parent
+                                                        visible: parent.isActive
+                                                        radius: 0; color: "transparent"; border.color: palette.accent; border.width: 1
+                                                        Text
+                                                        {
+                                                            anchors.centerIn: parent
+                                                            text: qsTr("Running"); font.bold: true; font.pixelSize: 10; color: palette.accent
+                                                        }
+                                                    }
+
+                                                    // Action Button (Install/Remove)
+                                                    Button
+                                                    {
+                                                        id: actionBtn
+                                                        anchors.fill: parent
+                                                        visible: !parent.isActive
+                                                        text: modelData.installed ? "Remove" : "Install"
+                                                        enabled: !bridge.busy
+                                                        contentItem: Text
+                                                        {
+                                                            text: actionBtn.text; font.bold: true; font.pixelSize: 10
+                                                            color: !actionBtn.enabled ? palette.comment : palette.accentFg
+                                                            horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                                                        }
+                                                        background: Rectangle
+                                                        {
+                                                            radius: 0
+                                                            color: !actionBtn.enabled ? palette.currentLine : (modelData.installed ? palette.pink : palette.green)
+                                                        }
+                                                        onClicked: modelData.installed ? bridge.removeKernel(modelData.name) : bridge.installKernel(modelData.name)
+                                                    }
                                                 }
                                             }
                                         }
+                                    }
+                                }
+
+                                // Shown when the grid has no items
+                                ColumnLayout
+                                {
+                                    anchors.centerIn: parent
+                                    spacing: 6
+                                    visible: kernelGrid.count === 0
+                                    Text
+                                    {
+                                        Layout.alignment: Qt.AlignHCenter
+                                        text: bridge.busy ? qsTr("Loading kernels…")
+                                              : (kernelSearch.text.trim().length > 0 ? qsTr("No matches") : qsTr("No kernels found"))
+                                        color: palette.textSoft; font.pixelSize: 14; font.weight: Font.Medium
+                                    }
+                                    Text
+                                    {
+                                        Layout.alignment: Qt.AlignHCenter
+                                        text: bridge.busy ? qsTr("Querying the Void repositories")
+                                              : (kernelSearch.text.trim().length > 0
+                                                 ? qsTr("No kernel matches “%1”").arg(kernelSearch.text.trim())
+                                                 : qsTr("Nothing to show yet — try the Downloads tab"))
+                                        color: palette.comment; font.pixelSize: 11
                                     }
                                 }
                             }
                         }
 
                         // 1: Downloads
-                        ColumnLayout
+                        ScrollView
                         {
-                            spacing: 25
+                            id: downloadsScroll
                             Layout.fillWidth: true; Layout.fillHeight: true
-                            GroupBox
+                            clip: true
+                            ScrollBar.vertical.policy: ScrollBar.AsNeeded
+                            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+
+                            ColumnLayout
                             {
-                                label: RowLayout
-                                {
-                                    spacing: 12
-                                    Rectangle
-                                    {
-                                        width: 4; height: 20; radius: 2; color: palette.green
-                                    }
-                                    Text
-                                    {
-                                        text: qsTr("KERNEL.ORG DOWNLOAD"); color: palette.green; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.1
-                                    }
-                                }
-                                Layout.fillWidth: true
-                                background: Rectangle
-                                {
-                                    color: palette.surface; radius: 12; border.color: palette.currentLine; y: 15
-                                }
+                                width: downloadsScroll.availableWidth
+                                spacing: 12
+
+                                // Page header
                                 ColumnLayout
                                 {
-                                    anchors.fill: parent; anchors.margins: 20; anchors.topMargin: 30; spacing: 20
-                                    RowLayout
+                                    Layout.fillWidth: true
+                                    spacing: 2
+                                    Text
                                     {
-                                        spacing: 20
-                                        ColumnLayout
-                                        {
-                                            Text
-                                            {
-                                                text: qsTr("Variant"); color: palette.comment; font.pixelSize: 12
-                                            }
-                                            ComboBox
-                                            {
-                                                id: kernelVariant; model: ["stable", "lts", "mainline", "all"]; Layout.preferredWidth: 160
-                                                onCurrentTextChanged: bridge.fetchKernelOrgVersions(currentText)
-                                                Component.onCompleted: bridge.fetchKernelOrgVersions(currentText)
-                                                background: Rectangle
-                                                {
-                                                    implicitHeight: 40; radius: 10; color: palette.bg; border.color: palette.currentLine
-                                                }
-                                                delegate: ItemDelegate
-                                                {
-                                                    width: kernelVariant.width
-                                                    hoverEnabled: true
-                                                    padding: 10
-                                                    contentItem: Text
-                                                    {
-                                                        text: modelData
-                                                        color: highlighted ? "#1e1e2e" : (hovered ? "#a6e3a1" : "#cdd6f4")
-                                                        font: kernelVariant.font
-                                                        elide: Text.ElideRight
-                                                        verticalAlignment: Text.AlignVCenter
-                                                        Behavior on color
-                                                        {
-                                                            ColorAnimation
-                                                            {
-                                                                duration: 150
-                                                            }
-                                                        }
-                                                    }
-                                                    background: Rectangle
-                                                    {
-                                                        color: highlighted ? "#a6e3a1" : (hovered ? "#313244" : "transparent")
-                                                        radius: 4
-                                                        Behavior on color
-                                                        {
-                                                            ColorAnimation
-                                                            {
-                                                                duration: 150
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                popup: Popup
-                                                {
-                                                    y: kernelVariant.height + 2
-                                                    width: kernelVariant.width
-                                                    implicitHeight: Math.min(contentItem.implicitHeight, 400)
-                                                    padding: 4
-                                                    contentItem: ListView
-                                                    {
-                                                        clip: true
-                                                        implicitHeight: contentHeight
-                                                        model: kernelVariant.popup.visible ? kernelVariant.delegateModel : null
-                                                        currentIndex: kernelVariant.highlightedIndex
-                                                        ScrollIndicator.vertical: ScrollIndicator
-                                                        {
-                                                        }
-                                                    }
-                                                    background: Rectangle
-                                                    {
-                                                        color: "#1e1e2e"
-                                                        border.color: "#a6e3a1"
-                                                        border.width: 1
-                                                        radius: 8
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        ColumnLayout
-                                        {
-                                            Layout.fillWidth: true
-                                            Text
-                                            {
-                                                text: qsTr("Version"); color: palette.comment; font.pixelSize: 12
-                                            }
-                                            ComboBox
-                                            {
-                                                id: kernelVerCombo; model: bridge.kernelOrgVersions; Layout.fillWidth: true
-                                                background: Rectangle
-                                                {
-                                                    implicitHeight: 40; radius: 10; color: palette.bg; border.color: palette.currentLine
-                                                }
-                                                delegate: ItemDelegate
-                                                {
-                                                    width: kernelVerCombo.width
-                                                    hoverEnabled: true
-                                                    padding: 10
-                                                    contentItem: Text
-                                                    {
-                                                        text: modelData
-                                                        color: highlighted ? "#1e1e2e" : (hovered ? "#a6e3a1" : "#cdd6f4")
-                                                        font: kernelVerCombo.font
-                                                        elide: Text.ElideRight
-                                                        verticalAlignment: Text.AlignVCenter
-                                                        Behavior on color
-                                                        {
-                                                            ColorAnimation
-                                                            {
-                                                                duration: 150
-                                                            }
-                                                        }
-                                                    }
-                                                    background: Rectangle
-                                                    {
-                                                        color: highlighted ? "#a6e3a1" : (hovered ? "#313244" : "transparent")
-                                                        radius: 4
-                                                        Behavior on color
-                                                        {
-                                                            ColorAnimation
-                                                            {
-                                                                duration: 150
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                popup: Popup
-                                                {
-                                                    y: kernelVerCombo.height + 2
-                                                    width: kernelVerCombo.width
-                                                    implicitHeight: Math.min(contentItem.implicitHeight, 400)
-                                                    padding: 4
-                                                    contentItem: ListView
-                                                    {
-                                                        clip: true
-                                                        implicitHeight: contentHeight
-                                                        model: kernelVerCombo.popup.visible ? kernelVerCombo.delegateModel : null
-                                                        currentIndex: kernelVerCombo.highlightedIndex
-                                                        ScrollIndicator.vertical: ScrollIndicator
-                                                        {
-                                                        }
-                                                    }
-                                                    background: Rectangle
-                                                    {
-                                                        color: "#1e1e2e"
-                                                        border.color: "#a6e3a1"
-                                                        border.width: 1
-                                                        radius: 8
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Button
-                                    {
-                                        id: dlBtn; text: bridge.busy ? "Working..." : "Download Now"; Layout.fillWidth: true; enabled: kernelVerCombo.currentText !== "" && !bridge.busy
-                                        contentItem: Text
-                                        {
-                                            text: dlBtn.text; font.bold: true; font.pixelSize: 13; color: palette.bg; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                                        }
-                                        background: Rectangle
-                                        {
-                                            implicitHeight: 40; radius: 10; color: dlBtn.enabled ? palette.green : (bridge.busy ? palette.purple : palette.currentLine)
-                                            Rectangle
-                                            {
-                                                anchors.fill: parent; radius: 10; color: "white"; opacity: dlBtn.pressed ? 0.2 : (dlBtn.hovered ? 0.1 : 0.0)
-                                            }
-                                        }
-                                        onClicked: bridge.downloadKernelOrg(kernelVariant.currentText, kernelVerCombo.currentText)
-                                    }
-                                }
-                            }
-
-                            // Visual Separator with Gradient Effect
-                            Rectangle
-                            {
-                                Layout.fillWidth: true
-                                height: 2
-                                Layout.topMargin: 10
-                                Layout.bottomMargin: 10
-                                gradient: Gradient
-                                {
-                                    orientation: Gradient.Horizontal
-                                    GradientStop
-                                    {
-                                        position: 0.0; color: "transparent"
-                                    }
-                                    GradientStop
-                                    {
-                                        position: 0.2; color: palette.green
-                                    }
-                                    GradientStop
-                                    {
-                                        position: 0.5; color: palette.purple
-                                    }
-                                    GradientStop
-                                    {
-                                        position: 0.8; color: palette.green
-                                    }
-                                    GradientStop
-                                    {
-                                        position: 1.0; color: "transparent"
-                                    }
-                                }
-                            }
-
-                            GroupBox
-                            {
-                                label: RowLayout
-                                {
-                                    spacing: 12
-                                    Rectangle
-                                    {
-                                        width: 4; height: 20; radius: 2; color: palette.purple
+                                        text: qsTr("Download Kernels"); color: palette.fg; font.pixelSize: 16; font.weight: Font.Bold; font.letterSpacing: -0.2
+                                        Layout.fillWidth: true; elide: Text.ElideRight
                                     }
                                     Text
                                     {
-                                        text: qsTr("CUSTOM TARBALL / GIT REPOSITORY"); color: palette.purple; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.1
-                                    }
-                                    Item
-                                    {
-                                        Layout.fillWidth: true
-                                    }
-                                    Button
-                                    {
-                                        text: qsTr("Clean Uninstalled Templates"); enabled: !bridge.busy
-                                        onClicked: bridge.cleanUninstalledTemplates()
-                                        background: Rectangle
-                                        {
-                                            implicitWidth: 120; implicitHeight: 25; radius: 5; color: palette.currentLine
-                                        }
-                                        contentItem: Text
-                                        {
-                                            text: parent.text; color: palette.fg; font.bold: true; font.pixelSize: 10; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
-                                        }
+                                        text: qsTr("Fetch a kernel from kernel.org, or clone a custom kernel from a Git repository.")
+                                        color: palette.comment; font.pixelSize: 11
+                                        Layout.fillWidth: true; wrapMode: Text.WordWrap; elide: Text.ElideRight
                                     }
                                 }
-                                Layout.fillWidth: true
-                                background: Rectangle
-                                {
-                                    color: palette.surface; radius: 12; border.color: palette.currentLine; y: 15
-                                }
 
-                                RowLayout
+                                GroupBox
                                 {
-                                    anchors.fill: parent; anchors.margins: 20; anchors.topMargin: 30; spacing: 15
-                                    TextField
+                                    label: RowLayout
                                     {
-                                        id: gitUrl
-                                        placeholderText: qsTr("Git repo URL or tarball URL")
-                                        Layout.fillWidth: true; color: palette.fg; verticalAlignment: TextInput.AlignVCenter
-                                        background: Rectangle
+                                        spacing: 8
+                                        Rectangle
                                         {
-                                            implicitHeight: 40; color: palette.bg; radius: 10; border.color: palette.currentLine
+                                            width: 4; height: 20; radius: 0; color: palette.green
+                                        }
+                                        Text
+                                        {
+                                            text: qsTr("KERNEL.ORG DOWNLOAD"); color: palette.comment; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.1
                                         }
                                     }
-                                    Button
+                                    Layout.fillWidth: true
+                                    background: Rectangle
                                     {
-                                        id: cloneBtn
-                                        text: qsTr("Clone / Download")
-                                        Layout.preferredWidth: 160
-                                        enabled: gitUrl.text.trim().length > 0 && !bridge.busy
-
-                                        contentItem: Text
+                                        color: palette.surface; radius: 0; border.color: palette.currentLine; y: 15
+                                    }
+                                    ColumnLayout
+                                    {
+                                        anchors.fill: parent; anchors.margins: 12; anchors.topMargin: 24; spacing: 12
+                                        RowLayout
                                         {
-                                            text: cloneBtn.text
-                                            font.bold: true
-                                            font.pixelSize: 13
-                                            color: cloneBtn.enabled ? palette.bg : palette.comment
-                                            horizontalAlignment: Text.AlignHCenter
-                                            verticalAlignment: Text.AlignVCenter
-                                        }
-
-                                        background: Rectangle
-                                        {
-                                            implicitHeight: 40
-                                            radius: 10
-                                            color: cloneBtn.enabled ? palette.purple : palette.currentLine
-
-                                            Rectangle
+                                            spacing: 12
+                                            ColumnLayout
                                             {
-                                                anchors.fill: parent
-                                                radius: 10
-                                                color: "white"
-                                                opacity: cloneBtn.enabled ? (cloneBtn.pressed ? 0.2 : (cloneBtn.hovered ? 0.1 : 0.0)) : 0.0
-                                                visible: cloneBtn.enabled
+                                                Text
+                                                {
+                                                    text: qsTr("Variant"); color: palette.comment; font.pixelSize: 12
+                                                }
+                                                ComboBox
+                                                {
+                                                    id: kernelVariant; model: ["stable", "lts", "mainline", "all"]; Layout.preferredWidth: 160
+                                                    onCurrentTextChanged: bridge.fetchKernelOrgVersions(currentText)
+                                                    Component.onCompleted: bridge.fetchKernelOrgVersions(currentText)
+                                                    background: Rectangle
+                                                    {
+                                                        implicitHeight: 32; radius: 0; color: palette.bg; border.color: palette.currentLine
+                                                    }
+                                                    delegate: ItemDelegate
+                                                    {
+                                                        width: kernelVariant.width
+                                                        hoverEnabled: true
+                                                        padding: 10
+                                                        contentItem: Text
+                                                        {
+                                                            text: modelData
+                                                            color: highlighted ? palette.accentFg : palette.fg
+                                                            font: kernelVariant.font
+                                                            elide: Text.ElideRight
+                                                            verticalAlignment: Text.AlignVCenter
+                                                            Behavior on color
+                                                            {
+                                                                ColorAnimation
+                                                                {
+                                                                    duration: 150
+                                                                }
+                                                            }
+                                                        }
+                                                        background: Rectangle
+                                                        {
+                                                            color: highlighted ? palette.accent : (hovered ? palette.surfaceHi : "transparent")
+                                                            radius: 0
+                                                            Behavior on color
+                                                            {
+                                                                ColorAnimation
+                                                                {
+                                                                    duration: 150
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    popup: Popup
+                                                    {
+                                                        y: kernelVariant.height + 2
+                                                        width: kernelVariant.width
+                                                        implicitHeight: Math.min(contentItem.implicitHeight, 400)
+                                                        padding: 4
+                                                        contentItem: ListView
+                                                        {
+                                                            clip: true
+                                                            implicitHeight: contentHeight
+                                                            model: kernelVariant.popup.visible ? kernelVariant.delegateModel : null
+                                                            currentIndex: kernelVariant.highlightedIndex
+                                                            ScrollIndicator.vertical: ScrollIndicator
+                                                            {
+                                                            }
+                                                        }
+                                                        background: Rectangle
+                                                        {
+                                                            color: palette.surface
+                                                            border.color: palette.currentLine
+                                                            border.width: 1
+                                                            radius: 0
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            ColumnLayout
+                                            {
+                                                Layout.fillWidth: true
+                                                Text
+                                                {
+                                                    text: qsTr("Version"); color: palette.comment; font.pixelSize: 12
+                                                }
+                                                ComboBox
+                                                {
+                                                    id: kernelVerCombo; model: bridge.kernelOrgVersions; Layout.fillWidth: true
+                                                    background: Rectangle
+                                                    {
+                                                        implicitHeight: 32; radius: 0; color: palette.bg; border.color: palette.currentLine
+                                                    }
+                                                    delegate: ItemDelegate
+                                                    {
+                                                        width: kernelVerCombo.width
+                                                        hoverEnabled: true
+                                                        padding: 10
+                                                        contentItem: Text
+                                                        {
+                                                            text: modelData
+                                                            color: highlighted ? palette.accentFg : palette.fg
+                                                            font: kernelVerCombo.font
+                                                            elide: Text.ElideRight
+                                                            verticalAlignment: Text.AlignVCenter
+                                                            Behavior on color
+                                                            {
+                                                                ColorAnimation
+                                                                {
+                                                                    duration: 150
+                                                                }
+                                                            }
+                                                        }
+                                                        background: Rectangle
+                                                        {
+                                                            color: highlighted ? palette.accent : (hovered ? palette.surfaceHi : "transparent")
+                                                            radius: 0
+                                                            Behavior on color
+                                                            {
+                                                                ColorAnimation
+                                                                {
+                                                                    duration: 150
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    popup: Popup
+                                                    {
+                                                        y: kernelVerCombo.height + 2
+                                                        width: kernelVerCombo.width
+                                                        implicitHeight: Math.min(contentItem.implicitHeight, 400)
+                                                        padding: 4
+                                                        contentItem: ListView
+                                                        {
+                                                            clip: true
+                                                            implicitHeight: contentHeight
+                                                            model: kernelVerCombo.popup.visible ? kernelVerCombo.delegateModel : null
+                                                            currentIndex: kernelVerCombo.highlightedIndex
+                                                            ScrollIndicator.vertical: ScrollIndicator
+                                                            {
+                                                            }
+                                                        }
+                                                        background: Rectangle
+                                                        {
+                                                            color: palette.surface
+                                                            border.color: palette.currentLine
+                                                            border.width: 1
+                                                            radius: 0
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
-
-                                        onClicked: bridge.cloneCustomGit(gitUrl.text.trim())
+                                        Button
+                                        {
+                                            id: dlBtn; text: bridge.busy ? "Working..." : "Download Now"; Layout.fillWidth: true; enabled: kernelVerCombo.currentText !== "" && !bridge.busy
+                                            contentItem: Text
+                                            {
+                                                text: dlBtn.text; font.bold: true; font.pixelSize: 13; color: palette.accentFg; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                                            }
+                                            background: Rectangle
+                                            {
+                                                implicitHeight: 32; radius: 0; color: dlBtn.enabled ? palette.green : (bridge.busy ? palette.purple : palette.currentLine)
+                                                Rectangle
+                                                {
+                                                    anchors.fill: parent; radius: 0; color: "white"; opacity: dlBtn.pressed ? 0.2 : (dlBtn.hovered ? 0.1 : 0.0)
+                                                }
+                                            }
+                                            onClicked: bridge.downloadKernelOrg(kernelVariant.currentText, kernelVerCombo.currentText)
+                                        }
                                     }
                                 }
-                            }
-                            Item
-                            {
-                                Layout.fillHeight: true
+
+                                // Separator — flat 1px divider (borders-only depth)
+                                Rectangle
+                                {
+                                    Layout.fillWidth: true
+                                    height: 1
+                                    Layout.topMargin: 6
+                                    Layout.bottomMargin: 6
+                                    color: palette.currentLine
+                                }
+
+                                GroupBox
+                                {
+                                    label: RowLayout
+                                    {
+                                        spacing: 8
+                                        Rectangle
+                                        {
+                                            width: 4; height: 20; radius: 0; color: palette.purple
+                                        }
+                                        Text
+                                        {
+                                            text: qsTr("CUSTOM TARBALL / GIT REPOSITORY"); color: palette.comment; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.1
+                                        }
+                                        Item
+                                        {
+                                            Layout.fillWidth: true
+                                        }
+                                        Button
+                                        {
+                                            id: cleanBtn
+                                            text: qsTr("Clean Uninstalled Templates"); enabled: !bridge.busy
+                                            hoverEnabled: true
+                                            ToolTip.text: qsTr("Delete leftover build templates for kernels that are no longer installed")
+                                            ToolTip.visible: hovered; ToolTip.delay: 500
+                                            onClicked: bridge.cleanUninstalledTemplates()
+                                            background: Rectangle
+                                            {
+                                                implicitWidth: 120; implicitHeight: 22; radius: 0
+                                                color: cleanBtn.hovered ? palette.surfaceHi : palette.currentLine
+                                            }
+                                            contentItem: Text
+                                            {
+                                                text: parent.text; color: palette.fg; font.bold: true; font.pixelSize: 10; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                                            }
+                                        }
+                                    }
+                                    Layout.fillWidth: true
+                                    background: Rectangle
+                                    {
+                                        color: palette.surface; radius: 0; border.color: palette.currentLine; y: 15
+                                    }
+
+                                    RowLayout
+                                    {
+                                        anchors.fill: parent; anchors.margins: 12; anchors.topMargin: 24; spacing: 10
+                                        TextField
+                                        {
+                                            id: gitUrl
+                                            placeholderText: qsTr("Git repo URL or tarball URL")
+                                            Layout.fillWidth: true; color: palette.fg; verticalAlignment: TextInput.AlignVCenter
+                                            background: Rectangle
+                                            {
+                                                implicitHeight: 32; color: palette.bg; radius: 0; border.color: palette.currentLine
+                                            }
+                                        }
+                                        Button
+                                        {
+                                            id: cloneBtn
+                                            text: qsTr("Clone / Download")
+                                            Layout.preferredWidth: 160
+                                            enabled: gitUrl.text.trim().length > 0 && !bridge.busy
+
+                                            contentItem: Text
+                                            {
+                                                text: cloneBtn.text
+                                                font.bold: true
+                                                font.pixelSize: 13
+                                                color: cloneBtn.enabled ? palette.accentFg : palette.comment
+                                                horizontalAlignment: Text.AlignHCenter
+                                                verticalAlignment: Text.AlignVCenter
+                                            }
+
+                                            background: Rectangle
+                                            {
+                                                implicitHeight: 32
+                                                radius: 0
+                                                color: cloneBtn.enabled ? palette.purple : palette.currentLine
+
+                                                Rectangle
+                                                {
+                                                    anchors.fill: parent
+                                                    radius: 0
+                                                    color: "white"
+                                                    opacity: cloneBtn.enabled ? (cloneBtn.pressed ? 0.2 : (cloneBtn.hovered ? 0.1 : 0.0)) : 0.0
+                                                    visible: cloneBtn.enabled
+                                                }
+                                            }
+
+                                            onClicked: bridge.cloneCustomGit(gitUrl.text.trim())
+                                        }
+                                    }
+                                }
+                                Item
+                                {
+                                    Layout.fillHeight: true
+                                }
                             }
                         }
                         // 2: Build & Config
@@ -919,44 +965,120 @@ ApplicationWindow
                             ColumnLayout
                             {
                                 width: buildConfigScroll.availableWidth
-                                spacing: 30
+                                spacing: 14
                                 Layout.fillWidth: true; Layout.fillHeight: true
+
+                                // Page header
+                                ColumnLayout
+                                {
+                                    Layout.fillWidth: true
+                                    spacing: 2
+                                    Text
+                                    {
+                                        text: qsTr("Build & Configuration"); color: palette.fg; font.pixelSize: 16; font.weight: Font.Bold; font.letterSpacing: -0.2
+                                        Layout.fillWidth: true; elide: Text.ElideRight
+                                    }
+                                    Text
+                                    {
+                                        text: qsTr("Tune optimization options, then build and export a custom kernel package.")
+                                        color: palette.comment; font.pixelSize: 11
+                                        Layout.fillWidth: true; wrapMode: Text.WordWrap; elide: Text.ElideRight
+                                    }
+                                }
 
                                 GroupBox
                             {
                                 Layout.fillWidth: true
+                                // Grow to fit the content's real height (so 1/2-column reflow never overlaps)
+                                implicitHeight: optGrid.implicitHeight + 40
                                 label: RowLayout
                                 {
-                                    spacing: 12
+                                    spacing: 8
                                     Rectangle
                                     {
-                                        width: 4; height: 20; radius: 2; color: palette.green
+                                        width: 4; height: 20; radius: 0; color: palette.green
                                     }
                                     Text
                                     {
-                                        text: qsTr("KERNEL OPTIMIZATION SETTINGS"); color: palette.green; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.1
+                                        text: qsTr("KERNEL OPTIMIZATION SETTINGS"); color: palette.comment; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.1
                                     }
                                 }
                                 background: Rectangle
                                 {
-                                    color: palette.surface; radius: 12; border.color: palette.currentLine; y: 15
+                                    color: palette.surface; radius: 0; border.color: palette.currentLine; y: 15
                                 }
 
                                 GridLayout
                                 {
-                                    anchors.fill: parent; anchors.margins: 20; anchors.topMargin: 30
-                                    columns: 3; rowSpacing: 20; columnSpacing: 25
+                                    id: optGrid
+                                    // Anchor top/sides only — natural height, so rows never compress/overlap
+                                    anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                                    anchors.leftMargin: 12; anchors.rightMargin: 12; anchors.topMargin: 24
+                                    // Responsive: 3 columns when wide, reflow to 2 / 1 as the window shrinks
+                                    columns: window.width < 720 ? 1 : (window.width < 980 ? 2 : 3)
+                                    rowSpacing: 12; columnSpacing: 14
                                     CheckBox
                                     {
+                                        id: ckLto; spacing: 8
                                         text: qsTr("Enable LTO"); checked: bridge.lto; onCheckedChanged: bridge.lto = checked
+                                        hoverEnabled: true
+                                        ToolTip.text: qsTr("Link Time Optimization — smaller, faster kernel but a much slower build")
+                                        ToolTip.visible: hovered; ToolTip.delay: 500
+                                        indicator: Rectangle
+                                        {
+                                            implicitWidth: 16; implicitHeight: 16; radius: 0
+                                            x: 0; anchors.verticalCenter: parent.verticalCenter
+                                            color: ckLto.checked ? palette.accent : palette.surface
+                                            border.color: ckLto.checked ? palette.accent : (ckLto.hovered ? palette.borderHi : palette.currentLine)
+                                            Rectangle { anchors.centerIn: parent; width: 8; height: 8; radius: 0; color: palette.accentFg; visible: ckLto.checked }
+                                        }
+                                        contentItem: Text
+                                        {
+                                            text: ckLto.text; color: palette.fg; font.pixelSize: 13
+                                            verticalAlignment: Text.AlignVCenter; leftPadding: ckLto.indicator.width + ckLto.spacing
+                                        }
                                     }
                                     CheckBox
                                     {
+                                        id: ckZfs; spacing: 8
                                         text: qsTr("ZFS Support"); checked: bridge.zfsSupport; onCheckedChanged: bridge.zfsSupport = checked
+                                        hoverEnabled: true
+                                        ToolTip.text: qsTr("Build the ZFS filesystem module against this kernel")
+                                        ToolTip.visible: hovered; ToolTip.delay: 500
+                                        indicator: Rectangle
+                                        {
+                                            implicitWidth: 16; implicitHeight: 16; radius: 0
+                                            x: 0; anchors.verticalCenter: parent.verticalCenter
+                                            color: ckZfs.checked ? palette.accent : palette.surface
+                                            border.color: ckZfs.checked ? palette.accent : (ckZfs.hovered ? palette.borderHi : palette.currentLine)
+                                            Rectangle { anchors.centerIn: parent; width: 8; height: 8; radius: 0; color: palette.accentFg; visible: ckZfs.checked }
+                                        }
+                                        contentItem: Text
+                                        {
+                                            text: ckZfs.text; color: palette.fg; font.pixelSize: 13
+                                            verticalAlignment: Text.AlignVCenter; leftPadding: ckZfs.indicator.width + ckZfs.spacing
+                                        }
                                     }
                                     CheckBox
                                     {
+                                        id: ckNvidia; spacing: 8
                                         text: qsTr("NVIDIA Support"); checked: bridge.nvidiaSupport; onCheckedChanged: bridge.nvidiaSupport = checked
+                                        hoverEnabled: true
+                                        ToolTip.text: qsTr("Build the proprietary NVIDIA driver against this kernel")
+                                        ToolTip.visible: hovered; ToolTip.delay: 500
+                                        indicator: Rectangle
+                                        {
+                                            implicitWidth: 16; implicitHeight: 16; radius: 0
+                                            x: 0; anchors.verticalCenter: parent.verticalCenter
+                                            color: ckNvidia.checked ? palette.accent : palette.surface
+                                            border.color: ckNvidia.checked ? palette.accent : (ckNvidia.hovered ? palette.borderHi : palette.currentLine)
+                                            Rectangle { anchors.centerIn: parent; width: 8; height: 8; radius: 0; color: palette.accentFg; visible: ckNvidia.checked }
+                                        }
+                                        contentItem: Text
+                                        {
+                                            text: ckNvidia.text; color: palette.fg; font.pixelSize: 13
+                                            verticalAlignment: Text.AlignVCenter; leftPadding: ckNvidia.indicator.width + ckNvidia.spacing
+                                        }
                                     }
 
                                     ColumnLayout
@@ -973,7 +1095,7 @@ ApplicationWindow
                                             onCurrentTextChanged: bridge.preempt = currentText
                                             background: Rectangle
                                             {
-                                                implicitHeight: 40; radius: 10; color: palette.bg; border.color: palette.currentLine
+                                                implicitHeight: 32; radius: 0; color: palette.bg; border.color: palette.currentLine
                                             }
                                             delegate: ItemDelegate
                                             {
@@ -983,7 +1105,7 @@ ApplicationWindow
                                                 contentItem: Text
                                                 {
                                                     text: modelData
-                                                    color: highlighted ? "#1e1e2e" : (hovered ? "#a6e3a1" : "#cdd6f4")
+                                                    color: highlighted ? palette.accentFg : palette.fg
                                                     font: preemptCombo.font
                                                     elide: Text.ElideRight
                                                     verticalAlignment: Text.AlignVCenter
@@ -997,8 +1119,8 @@ ApplicationWindow
                                                 }
                                                 background: Rectangle
                                                 {
-                                                    color: highlighted ? "#a6e3a1" : (hovered ? "#313244" : "transparent")
-                                                    radius: 4
+                                                    color: highlighted ? palette.accent : (hovered ? palette.surfaceHi : "transparent")
+                                                    radius: 0
                                                     Behavior on color
                                                     {
                                                         ColorAnimation
@@ -1026,10 +1148,10 @@ ApplicationWindow
                                                 }
                                                 background: Rectangle
                                                 {
-                                                    color: "#1e1e2e"
-                                                    border.color: "#a6e3a1"
+                                                    color: palette.surface
+                                                    border.color: palette.currentLine
                                                     border.width: 1
-                                                    radius: 8
+                                                    radius: 0
                                                 }
                                             }
                                         }
@@ -1037,7 +1159,7 @@ ApplicationWindow
 
                                     ColumnLayout
                                     {
-                                        Layout.columnSpan: 2
+                                        Layout.columnSpan: Math.min(2, optGrid.columns)
                                         RowLayout
                                         {
                                             spacing: 8
@@ -1047,7 +1169,7 @@ ApplicationWindow
                                             }
                                             Rectangle
                                             {
-                                                width: 65; height: 14; radius: 4; color: palette.green; opacity: 0.15
+                                                width: 65; height: 14; radius: 0; color: palette.green; opacity: 0.15
                                                 Text
                                                 {
                                                     anchors.centerIn: parent; text: bridge.detectedCpuLevel; color: palette.green; font.pixelSize: 8; font.bold: true
@@ -1062,7 +1184,7 @@ ApplicationWindow
                                             onCurrentTextChanged: bridge.cpuOpt = currentText
                                             background: Rectangle
                                             {
-                                                implicitHeight: 40; radius: 10; color: palette.bg; border.color: palette.currentLine
+                                                implicitHeight: 32; radius: 0; color: palette.bg; border.color: palette.currentLine
                                             }
                                             delegate: ItemDelegate
                                             {
@@ -1076,7 +1198,7 @@ ApplicationWindow
                                                     {
                                                         text: modelData
                                                         // Using hardcoded color values based on palette definitions to avoid scope issues in ItemDelegate
-                                                        color: (modelData === bridge.detectedCpuLevel) ? "#cba6f7" : (highlighted ? "#1e1e2e" : (hovered ? "#a6e3a1" : "#cdd6f4"))
+                                                        color: (modelData === bridge.detectedCpuLevel) ? palette.accent : (highlighted ? palette.accentFg : palette.fg)
                                                         font.family: cpuOptCombo.font.family
                                                         font.pixelSize: cpuOptCombo.font.pixelSize
                                                         elide: Text.ElideRight
@@ -1087,15 +1209,15 @@ ApplicationWindow
                                                     Text
                                                     {
                                                         text: "★"
-                                                        color: "#cba6f7"
+                                                        color: palette.accent
                                                         visible: modelData === bridge.detectedCpuLevel
                                                         font.pixelSize: 10
                                                     }
                                                 }
                                                 background: Rectangle
                                                 {
-                                                    color: highlighted ? "#a6e3a1" : (hovered ? "#313244" : "transparent")
-                                                    radius: 4
+                                                    color: highlighted ? palette.accent : (hovered ? palette.surfaceHi : "transparent")
+                                                    radius: 0
                                                 }
                                             }
                                             popup: Popup
@@ -1116,10 +1238,10 @@ ApplicationWindow
                                                 }
                                                 background: Rectangle
                                                 {
-                                                    color: "#1e1e2e"
-                                                    border.color: "#a6e3a1"
+                                                    color: palette.surface
+                                                    border.color: palette.currentLine
                                                     border.width: 1
-                                                    radius: 8
+                                                    radius: 0
                                                 }
                                             }
                                         }
@@ -1139,7 +1261,7 @@ ApplicationWindow
                                             onCurrentTextChanged: bridge.optLevel = currentText
                                             background: Rectangle
                                             {
-                                                implicitHeight: 40; radius: 10; color: palette.bg; border.color: palette.currentLine
+                                                implicitHeight: 32; radius: 0; color: palette.bg; border.color: palette.currentLine
                                             }
                                             delegate: ItemDelegate
                                             {
@@ -1149,15 +1271,15 @@ ApplicationWindow
                                                 contentItem: Text
                                                 {
                                                     text: modelData
-                                                    color: highlighted ? "#1e1e2e" : (hovered ? "#a6e3a1" : "#cdd6f4")
+                                                    color: highlighted ? palette.accentFg : palette.fg
                                                     font: optLevelCombo.font
                                                     elide: Text.ElideRight
                                                     verticalAlignment: Text.AlignVCenter
                                                 }
                                                 background: Rectangle
                                                 {
-                                                    color: highlighted ? "#a6e3a1" : (hovered ? "#313244" : "transparent")
-                                                    radius: 4
+                                                    color: highlighted ? palette.accent : (hovered ? palette.surfaceHi : "transparent")
+                                                    radius: 0
                                                 }
                                             }
                                             popup: Popup
@@ -1178,10 +1300,10 @@ ApplicationWindow
                                                 }
                                                 background: Rectangle
                                                 {
-                                                    color: "#1e1e2e"
-                                                    border.color: "#a6e3a1"
+                                                    color: palette.surface
+                                                    border.color: palette.currentLine
                                                     border.width: 1
-                                                    radius: 8
+                                                    radius: 0
                                                 }
                                             }
                                         }
@@ -1189,7 +1311,7 @@ ApplicationWindow
 
                                     ColumnLayout
                                     {
-                                        Layout.columnSpan: 2
+                                        Layout.columnSpan: Math.min(2, optGrid.columns)
                                         Text
                                         {
                                             text: qsTr("ZRAM Compression"); color: palette.comment; font.pixelSize: 12
@@ -1202,7 +1324,7 @@ ApplicationWindow
                                             onCurrentTextChanged: bridge.zramType = currentText
                                             background: Rectangle
                                             {
-                                                implicitHeight: 40; radius: 10; color: palette.bg; border.color: palette.currentLine
+                                                implicitHeight: 32; radius: 0; color: palette.bg; border.color: palette.currentLine
                                             }
                                             delegate: ItemDelegate
                                             {
@@ -1212,15 +1334,15 @@ ApplicationWindow
                                                 contentItem: Text
                                                 {
                                                     text: modelData
-                                                    color: highlighted ? "#1e1e2e" : (hovered ? "#a6e3a1" : "#cdd6f4")
+                                                    color: highlighted ? palette.accentFg : palette.fg
                                                     font: zramCombo.font
                                                     elide: Text.ElideRight
                                                     verticalAlignment: Text.AlignVCenter
                                                 }
                                                 background: Rectangle
                                                 {
-                                                    color: highlighted ? "#a6e3a1" : (hovered ? "#313244" : "transparent")
-                                                    radius: 4
+                                                    color: highlighted ? palette.accent : (hovered ? palette.surfaceHi : "transparent")
+                                                    radius: 0
                                                 }
                                             }
                                             popup: Popup
@@ -1241,10 +1363,10 @@ ApplicationWindow
                                                 }
                                                 background: Rectangle
                                                 {
-                                                    color: "#1e1e2e"
-                                                    border.color: "#a6e3a1"
+                                                    color: palette.surface
+                                                    border.color: palette.currentLine
                                                     border.width: 1
-                                                    radius: 8
+                                                    radius: 0
                                                 }
                                             }
                                         }
@@ -1252,7 +1374,7 @@ ApplicationWindow
 
                                     ColumnLayout
                                     {
-                                        Layout.columnSpan: 3
+                                        Layout.columnSpan: Math.min(3, optGrid.columns)
                                         Text
                                         {
                                             text: qsTr("Extra KCFLAGS"); color: palette.comment; font.pixelSize: 12
@@ -1266,7 +1388,7 @@ ApplicationWindow
                                             onTextChanged: bridge.extraFlags = text
                                             background: Rectangle
                                             {
-                                                implicitHeight: 40; radius: 10; color: palette.bg; border.color: palette.currentLine
+                                                implicitHeight: 32; radius: 0; color: palette.bg; border.color: palette.currentLine
                                             }
                                             font.pixelSize: 12
                                             color: palette.fg
@@ -1276,37 +1398,14 @@ ApplicationWindow
                                 }
                             }
 
-                            // Visual Separator with Gradient Effect
+                            // Separator — flat 1px divider (borders-only depth)
                             Rectangle
                             {
                                 Layout.fillWidth: true
-                                height: 2
-                                Layout.topMargin: 10
-                                Layout.bottomMargin: 10
-                                gradient: Gradient
-                                {
-                                    orientation: Gradient.Horizontal
-                                    GradientStop
-                                    {
-                                        position: 0.0; color: "transparent"
-                                    }
-                                    GradientStop
-                                    {
-                                        position: 0.2; color: palette.green
-                                    }
-                                    GradientStop
-                                    {
-                                        position: 0.5; color: palette.purple
-                                    }
-                                    GradientStop
-                                    {
-                                        position: 0.8; color: palette.green
-                                    }
-                                    GradientStop
-                                    {
-                                        position: 1.0; color: "transparent"
-                                    }
-                                }
+                                height: 1
+                                Layout.topMargin: 6
+                                Layout.bottomMargin: 6
+                                color: palette.currentLine
                             }
 
                             GroupBox
@@ -1314,34 +1413,34 @@ ApplicationWindow
                                 Layout.fillWidth: true
                                 label: RowLayout
                                 {
-                                    spacing: 12
+                                    spacing: 8
                                     Rectangle
                                     {
-                                        width: 4; height: 20; radius: 2; color: palette.purple
+                                        width: 4; height: 20; radius: 0; color: palette.purple
                                     }
                                     Text
                                     {
-                                        text: qsTr("BUILD ORCHESTRATION"); color: palette.purple; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.1
+                                        text: qsTr("BUILD ORCHESTRATION"); color: palette.comment; font.bold: true; font.pixelSize: 13; font.letterSpacing: 1.1
                                     }
                                 }
                                 background: Rectangle
                                 {
-                                    color: palette.surface; radius: 12; border.color: palette.currentLine; y: 15
+                                    color: palette.surface; radius: 0; border.color: palette.currentLine; y: 15
                                 }
 
                                 ColumnLayout
                                 {
-                                    anchors.fill: parent; anchors.margins: 20; anchors.topMargin: 30; spacing: 20
+                                    anchors.fill: parent; anchors.margins: 12; anchors.topMargin: 24; spacing: 12
                                     RowLayout
                                     {
-                                        spacing: 15
+                                        spacing: 10
                                         TextField
                                         {
                                             id: templateName; text: bridge.targetTemplate; Layout.fillWidth: true; color: palette.fg; verticalAlignment: TextInput.AlignVCenter
                                             onTextChanged: bridge.targetTemplate = text
                                             background: Rectangle
                                             {
-                                                implicitHeight: 40; color: palette.bg; radius: 10; border.color: palette.currentLine
+                                                implicitHeight: 32; color: palette.bg; radius: 0; border.color: palette.currentLine
                                             }
                                         }
                                         Button
@@ -1349,14 +1448,14 @@ ApplicationWindow
                                             id: buildBtn; text: qsTr("Build Kernel"); Layout.preferredWidth: 150; enabled: !bridge.busy
                                             contentItem: Text
                                             {
-                                                text: buildBtn.text; font.bold: true; font.pixelSize: 13; color: palette.bg; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                                                text: buildBtn.text; font.bold: true; font.pixelSize: 13; color: palette.accentFg; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                                             }
                                             background: Rectangle
                                             {
-                                                implicitHeight: 40; radius: 10; color: buildBtn.enabled ? palette.purple : palette.currentLine
+                                                implicitHeight: 32; radius: 0; color: buildBtn.enabled ? palette.purple : palette.currentLine
                                                 Rectangle
                                                 {
-                                                    anchors.fill: parent; radius: 10; color: "white"; opacity: buildBtn.pressed ? 0.2 : (buildBtn.hovered ? 0.1 : 0.0)
+                                                    anchors.fill: parent; radius: 0; color: "white"; opacity: buildBtn.pressed ? 0.2 : (buildBtn.hovered ? 0.1 : 0.0)
                                                 }
                                             }
                                             onClicked: bridge.buildKernel(templateName.text)
@@ -1364,13 +1463,13 @@ ApplicationWindow
                                     }
                                     RowLayout
                                     {
-                                        spacing: 15
+                                        spacing: 10
                                         TextField
                                         {
                                             id: exportPath; placeholderText: qsTr("Export destination path..."); Layout.fillWidth: true; color: palette.fg; verticalAlignment: TextInput.AlignVCenter
                                             background: Rectangle
                                             {
-                                                implicitHeight: 40; color: palette.bg; radius: 10; border.color: palette.currentLine
+                                                implicitHeight: 32; color: palette.bg; radius: 0; border.color: palette.currentLine
                                             }
                                         }
                                         Button
@@ -1378,6 +1477,9 @@ ApplicationWindow
                                             id: exportBtn
                                             text: qsTr("Export XBPS")
                                             Layout.preferredWidth: 150
+                                            hoverEnabled: true
+                                            ToolTip.text: qsTr("Copy the built .xbps package(s) to the destination folder above")
+                                            ToolTip.visible: hovered; ToolTip.delay: 500
                                             enabled: exportPath.text.trim().length > 0 && !bridge.busy
 
                                             contentItem: Text
@@ -1385,22 +1487,22 @@ ApplicationWindow
                                                 text: exportBtn.text
                                                 font.bold: true
                                                 font.pixelSize: 13
-                                                color: exportBtn.enabled ? palette.bg : palette.comment
+                                                color: exportBtn.enabled ? palette.accentFg : palette.comment
                                                 horizontalAlignment: Text.AlignHCenter
                                                 verticalAlignment: Text.AlignVCenter
                                             }
 
                                             background: Rectangle
                                             {
-                                                implicitHeight: 40
-                                                radius: 10
+                                                implicitHeight: 32
+                                                radius: 0
                                                 color: exportBtn.enabled ? palette.purple : palette.currentLine
 
                                                 // Interactive overlay (only active when button is enabled)
                                                 Rectangle
                                                 {
                                                     anchors.fill: parent
-                                                    radius: 10
+                                                    radius: 0
                                                     color: "white"
                                                     opacity: exportBtn.enabled ? (exportBtn.pressed ? 0.2 : (exportBtn.hovered ? 0.1 : 0.0)) : 0.0
                                                     visible: exportBtn.enabled
@@ -1419,7 +1521,7 @@ ApplicationWindow
                                     }
                                     RowLayout
                                     {
-                                        spacing: 20
+                                        spacing: 12
                                         Button
                                         {
                                             id: sBtn; text: qsTr("Save Configuration"); Layout.fillWidth: true
@@ -1429,10 +1531,10 @@ ApplicationWindow
                                             }
                                             background: Rectangle
                                             {
-                                                implicitHeight: 40; radius: 10; color: palette.surface; border.color: palette.green; border.width: 1
+                                                implicitHeight: 32; radius: 0; color: palette.surface; border.color: palette.green; border.width: 1
                                                 Rectangle
                                                 {
-                                                    anchors.fill: parent; radius: 10; color: palette.green; opacity: sBtn.pressed ? 0.2 : (sBtn.hovered ? 0.1 : 0.0)
+                                                    anchors.fill: parent; radius: 0; color: palette.green; opacity: sBtn.pressed ? 0.2 : (sBtn.hovered ? 0.1 : 0.0)
                                                 }
                                             }
                                             onClicked: bridge.saveConfig()
@@ -1446,10 +1548,10 @@ ApplicationWindow
                                             }
                                             background: Rectangle
                                             {
-                                                implicitHeight: 40; radius: 10; color: palette.surface; border.color: palette.purple; border.width: 1
+                                                implicitHeight: 32; radius: 0; color: palette.surface; border.color: palette.purple; border.width: 1
                                                 Rectangle
                                                 {
-                                                    anchors.fill: parent; radius: 10; color: palette.purple; opacity: lBtn.pressed ? 0.2 : (lBtn.hovered ? 0.1 : 0.0)
+                                                    anchors.fill: parent; radius: 0; color: palette.purple; opacity: lBtn.pressed ? 0.2 : (lBtn.hovered ? 0.1 : 0.0)
                                                 }
                                             }
                                             onClicked: bridge.loadConfig()
@@ -1465,16 +1567,23 @@ ApplicationWindow
                     }
                 }
 
+                    // Footer divider
+                    Rectangle
+                    {
+                        Layout.fillWidth: true; Layout.topMargin: 6
+                        height: 1; color: palette.currentLine
+                    }
+
                     // Footer
                     RowLayout
                     {
-                        Layout.fillWidth: true; Layout.topMargin: 10
+                        Layout.fillWidth: true
                         ColumnLayout
                         {
                             spacing: 2
                             Text
                             {
-                                text: qsTr("STATUS: %1").arg(bridge.busy ? qsTr("BUSY") : qsTr("READY")); color: bridge.busy ? palette.orange : palette.green; font.bold: true; font.pixelSize: 10
+                                text: qsTr("STATUS: %1").arg(bridge.busy ? qsTr("BUSY") : qsTr("READY")); color: bridge.busy ? palette.accent : palette.comment; font.bold: true; font.pixelSize: 10; font.letterSpacing: 0.5
                             }
                             Text
                             {
@@ -1502,18 +1611,18 @@ ApplicationWindow
         width: 600; height: 400; modal: true; focus: true
         background: Rectangle
         {
-            color: palette.surface; radius: 12; border.color: palette.currentLine; border.width: 1
+            color: palette.surface; radius: 0; border.color: palette.currentLine; border.width: 1
         }
 
         ColumnLayout
         {
-            anchors.fill: parent; anchors.margins: 15; spacing: 10
+            anchors.fill: parent; anchors.margins: 10; spacing: 8
             RowLayout
             {
                 Layout.fillWidth: true
                 Text
                 {
-                    text: qsTr("System Logs & Operations"); color: palette.green; font.bold: true; font.pixelSize: 14
+                    text: qsTr("System Logs & Operations"); color: palette.fg; font.bold: true; font.pixelSize: 14
                 }
                 Item
                 {
@@ -1524,7 +1633,7 @@ ApplicationWindow
                     text: qsTr("Clear"); onClicked: bridge.clearLogs()
                     background: Rectangle
                     {
-                        implicitWidth: 60; implicitHeight: 25; radius: 5; color: palette.bg; border.color: palette.currentLine
+                        implicitWidth: 60; implicitHeight: 22; radius: 0; color: palette.bg; border.color: palette.currentLine
                     }
                     contentItem: Text
                     {
@@ -1536,24 +1645,24 @@ ApplicationWindow
                     text: qsTr("Close"); onClicked: logModal.close()
                     background: Rectangle
                     {
-                        implicitWidth: 60; implicitHeight: 25; radius: 5; color: palette.pink
+                        implicitWidth: 60; implicitHeight: 22; radius: 0; color: palette.accent
                     }
                     contentItem: Text
                     {
-                        text: parent.text; color: palette.bg; font.bold: true; font.pixelSize: 10; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
+                        text: parent.text; color: palette.accentFg; font.bold: true; font.pixelSize: 10; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter
                     }
                 }
             }
             Rectangle
             {
-                Layout.fillWidth: true; Layout.fillHeight: true; color: palette.bg; radius: 8; border.color: palette.currentLine
+                Layout.fillWidth: true; Layout.fillHeight: true; color: palette.bg; radius: 0; border.color: palette.currentLine
                 ScrollView
                 {
-                    anchors.fill: parent; anchors.margins: 10; clip: true
+                    anchors.fill: parent; anchors.margins: 8; clip: true
                     TextArea
                     {
                         id: logArea
-                        text: bridge.logs; readOnly: true; color: "#a6e3a1"
+                        text: bridge.logs; readOnly: true; color: palette.textSoft
                         font.family: "0xProto Nerd Font Mono"; font.pixelSize: 11
                         textFormat: TextEdit.RichText
                         background: null
