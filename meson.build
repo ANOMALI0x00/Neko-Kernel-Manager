@@ -44,9 +44,10 @@ src_files = files(
     'src/kernel.cpp',
     'src/utils.cpp',
     'src/kernel-bridge.cpp',
+    'src/theme-manager.cpp',
 )
 
-moc_files = qt6.compile_moc(headers: files('src/kernel-bridge.hpp'))
+moc_files = qt6.compile_moc(headers: files('src/kernel-bridge.hpp', 'src/theme-manager.hpp'))
 
 executable('neko-kernel-manager',
     sources: [src_files, qt6_resources, moc_files],
