@@ -13,9 +13,26 @@
 int main(int argc, char *argv[]) {
     // Set style to Fusion BEFORE creating QApplication to ensure consistency
     QApplication::setStyle(QStyleFactory::create("Fusion"));
-    
+
+    // El nombre de la aplicación debe coincidir con el ID del portal (neko-kernel-manager)
+    QCoreApplication::setApplicationName("neko-kernel-manager");
+    QCoreApplication::setApplicationVersion("1.4.0");
+    QCoreApplication::setOrganizationName("Neko");
+    QCoreApplication::setOrganizationDomain("com.neko");
+    QGuiApplication::setDesktopFileName("neko-kernel-manager");
+
     QApplication app(argc, argv);
+    app.setApplicationDisplayName("Neko Kernel Manager");
     app.setWindowIcon(QIcon(":/neko/Data/logo.png"));
+
+    // Parse command line arguments
+    bool verbose = false;
+    for (int i = 1; i < argc; ++i) {
+        QString arg = QString::fromLocal8Bit(argv[i]);
+        if (arg == "--verbose" || arg == "-v" || arg == "--debug") {
+            verbose = true;
+        }
+    }
 
     // Load Nerd Fonts
     QStringList fonts = {
@@ -98,6 +115,12 @@ int main(int argc, char *argv[]) {
     qmlRegisterType<KernelBridge>("Neko", 1, 0, "KernelBridge");
 
     KernelBridge bridge;
+    // Activar modo verbose si se pasó el argumento
+    if (verbose) {
+        bridge.setVerbose(true);
+        bridge.appendLog("Verbose mode enabled.");
+    }
+
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("theme", &theme);
     engine.rootContext()->setContextProperty("bridge", &bridge);

@@ -1,6 +1,6 @@
-project('neko-kernel-manager', 'cpp', 'rust',
-        version: '1.2.0',
-        license: 'GPLv2',
+project('neko-kernel-manager', 'cpp',
+        version: '1.4.0',
+        license: 'GPL-3.0-only',
         meson_version: '>=0.59.0',
         default_options: ['cpp_std=c++20',
                           'buildtype=debugoptimized',
@@ -21,24 +21,6 @@ qt6_resources = qt6.compile_resources(
     sources: files('resources.qrc')
 )
 
-# Common dependencies
-fmt = dependency('fmt', version : ['>=11.0.0'], fallback : ['fmt', 'fmt_dep'])
-
-# Build Rust library with Cargo
-cargo = find_program('cargo')
-rust_lib_name = 'config_option_lib'
-rust_lib_path = meson.current_source_dir() / 'config-option-lib'
-rust_target_dir = meson.current_build_dir() / 'rust'
-
-cargo_build = custom_target('cargo-build',
-    input: files('config-option-lib/src/lib.rs', 'config-option-lib/Cargo.toml'),
-    output: 'lib' + rust_lib_name + '.a',
-    command: [
-        'sh', '-c',
-        'cd ' + rust_lib_path + ' && CARGO_TARGET_DIR=' + rust_target_dir + ' ' + cargo.full_path() + ' build --release && cp ' + rust_target_dir + '/release/lib' + rust_lib_name + '.a ' + meson.current_build_dir() + '/@OUTPUT@'
-    ]
-)
-
 src_files = files(
     'src/main.cpp',
     'src/kernel.cpp',
@@ -51,8 +33,7 @@ moc_files = qt6.compile_moc(headers: files('src/kernel-bridge.hpp', 'src/theme-m
 
 executable('neko-kernel-manager',
     sources: [src_files, qt6_resources, moc_files],
-    dependencies: [qt6_dep, fmt],
-    link_with: [cargo_build],
+    dependencies: [qt6_dep],
     install: true,
 )
 

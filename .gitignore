@@ -1,5 +1,6 @@
 # Build artifacts
 build/
+dist/
 *.o
 *.a
 *.so
@@ -37,3 +38,5 @@ Dockerfile
 Dockerfile.*
 *.sh
 subprojects/corrosion/
+subprojects/fmt-12.0.0/
+subprojects/packagecache/

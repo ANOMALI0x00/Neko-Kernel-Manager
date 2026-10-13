@@ -1,8 +1,10 @@
 #include "theme-manager.hpp"
+#include "utils.hpp"
 
 #include <QDir>
 #include <QFile>
 #include <QRegularExpression>
+#include <QDebug>  // Añadido para mensajes de depuración
 
 // Resolve a raw @define-color value string to a QColor.
 //   #rgb / #rrggbb / named  -> QColor directly
@@ -46,7 +48,7 @@ static QColor parseValue(QString v, const QHash<QString, QString> &raw, int dept
 }
 
 ThemeManager::ThemeManager(QObject *parent) : QObject(parent) {
-    m_dir = QDir::homePath() + "/.config/gtk-4.0";
+    m_dir = QString::fromStdString(utils::getRealHome()) + "/.config/gtk-4.0";
     // gtk.css is where matugen / pywal / libadwaita write; noctalia.css is what
     // gtk.css @imports for Noctalia. Later files win, matching GTK's load order.
     m_files = { m_dir + "/gtk.css", m_dir + "/noctalia.css" };
@@ -93,9 +95,15 @@ void ThemeManager::load() {
     QString foundIn;
 
     for (const QString &path : m_files) {
-        QFile f(path);
-        if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
+        if (!QFile::exists(path)) {
             continue;
+        }
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            // Mensaje de depuración (no crítico)
+            qDebug() << "ThemeManager: Could not open" << path;
+            continue;
+        }
         const QString text = QString::fromUtf8(f.readAll());
         auto it = re.globalMatch(text);
         bool any = false;

@@ -8,19 +8,57 @@
 #include <QFile>
 #include <QTimer>
 #include <QTextStream>
-#include <QJsonDocument>
-#include <QJsonObject>
+#include <filesystem>
+#include <sstream>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <pwd.h>
 
-KernelBridge::KernelBridge(QObject *parent) : QObject(parent) {
-    loadConfig();
-    updateKernels();
+KernelBridge::KernelBridge(QObject *parent) : QObject(parent), m_verbose(false) {
 }
 
 KernelBridge::~KernelBridge() {
-    system("rm -rf /tmp/neko-kernel-*");
+    int res = system("rm -rf /tmp/neko-kernel-*");
+    (void)res;
+}
+
+void KernelBridge::setBusy(bool b) {
+    if (b) {
+        ++m_busyCount;
+        if (!m_busy) {
+            m_busy = true;
+            emit busyChanged();
+        }
+    } else {
+        if (m_busyCount > 0) {
+            --m_busyCount;
+        }
+        if (m_busyCount == 0 && m_busy) {
+            m_busy = false;
+            emit busyChanged();
+            setProgress(0);
+        }
+    }
+}
+
+void KernelBridge::setStatusMessage(const QString &message, bool isError) {
+    m_statusMessage = message;
+    m_statusIsError = isError;
+    emit statusMessageChanged();
+}
+
+QString KernelBridge::activeKernelVersion() const {
+    std::string out = utils::exec("uname -r");
+    return QString::fromStdString(out).trimmed();
+}
+
+QString KernelBridge::detectedCpuLevel() const {
+    return QString::fromStdString(utils::detectCpuLevel());
+}
+
+// Void Linux usa GRUB como bootloader por defecto
+QString KernelBridge::detectedBootloader() const {
+    return "GRUB";
 }
 
 QVariantList KernelBridge::getKernels() {
@@ -34,7 +72,8 @@ QVariantList KernelBridge::getKernels() {
         map["size"] = QString::fromStdString(k.size());
         map["installDate"] = QString::fromStdString(k.installDate());
         map["installed"] = k.is_installed();
-        map["type"] = k.category() == "Custom" ? "manual" : "xbps";
+        map["hasFiles"] = k.has_files();
+        map["type"] = QString::fromStdString(k.type());
         list.append(map);
     }
     return list;
@@ -42,650 +81,1048 @@ QVariantList KernelBridge::getKernels() {
 
 void KernelBridge::updateKernels() {
     setBusy(true);
-    setProgress(20);
-    setStatusMessage("Fetching kernel list from XBPS...", false);
-    
+    setProgress(15);
+    setStatusMessage("Scanning installed & available kernels...", false);
+    appendLog("Scanning system for installed and available kernels...");
+
     auto future = QtConcurrent::run([this]() {
+        QMetaObject::invokeMethod(this, [this]() { setProgress(40); });
+
         auto newList = getKernels();
+
         QMetaObject::invokeMethod(this, [this, newList]() {
             m_kernelsCache = newList;
-            setBusy(false);
-            setProgress(100);
-            QTimer::singleShot(1000, this, [this](){ setProgress(0); });
+            setProgress(75);
             emit kernelsChanged();
+            appendLog(QString("Kernel scan completed. Found %1 kernel entries:").arg(newList.size()));
+            for (const auto &var : newList) {
+                QVariantMap m = var.toMap();
+                appendLog(QString("  • %1 (%2) [Type: %3, Installed: %4]")
+                            .arg(m["name"].toString())
+                            .arg(m["version"].toString())
+                            .arg(m["type"].toString())
+                            .arg(m["installed"].toBool() ? "Yes" : "No"));
+            }
+        });
+
+        // --- REPOSITORY CREATION REMOVED ---
+        // The custom Neko repository is already part of the system (Neko Void).
+        // The application must not create or modify any repository files.
+
+        QMetaObject::invokeMethod(this, [this, newList]() {
+            m_kernelsCache = newList;
+            setProgress(100);
+            setStatusMessage("Kernels loaded successfully", false);
+            setBusy(false);
+            emit kernelsChanged();
+            QTimer::singleShot(1000, this, [this]() { setProgress(0); });
         });
     });
     (void)future;
 }
 
 void KernelBridge::appendLog(const QString &line) {
+    if (QThread::currentThread() != this->thread()) {
+        QMetaObject::invokeMethod(this, [this, line]() { appendLog(line); });
+        return;
+    }
+
     QString timestamp = QDateTime::currentDateTime().toString("hh:mm:ss");
     QString formattedLine = "[" + timestamp + "] ";
-    
+
+    if (m_verbose) {
+        formattedLine += "[VERBOSE] ";
+    }
+
     if (line.toLower().contains("error") || line.toLower().contains("failed")) {
         formattedLine += "<font color='#ff5555'>" + line + "</font>";
-    } else if (line.toLower().contains("success") || line.toLower().contains("complete")) {
+    } else if (line.toLower().contains("success") || line.toLower().contains("complete") || line.toLower().contains("finished")) {
         formattedLine += "<font color='#50fa7b'>" + line + "</font>";
     } else if (line.toLower().contains("warning")) {
         formattedLine += "<font color='#f1fa8c'>" + line + "</font>";
-    } else if (line.startsWith("Executing:") || line.startsWith("Starting")) {
+    } else if (line.startsWith("Executing:") || line.startsWith("Starting") || line.startsWith("Initiating") || line.startsWith("Scanning") || line.startsWith("Requesting")) {
         formattedLine += "<font color='#bd93f9'>" + line + "</font>";
     } else {
         formattedLine += line;
     }
 
     m_logs += formattedLine + "<br>";
-    if (m_logs.length() > 50000) m_logs = m_logs.right(40000);
+    if (m_logs.length() > 60000) m_logs = m_logs.right(45000);
     emit logsChanged();
 }
 
+void KernelBridge::exportLogs(const QString &filePath) {
+    if (m_logs.isEmpty()) {
+        appendLog("WARNING: No logs to export.");
+        setStatusMessage("No logs to export", true);
+        return;
+    }
+
+    QFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        appendLog("ERROR: Could not open file for writing: " + filePath);
+        setStatusMessage("Failed to export logs", true);
+        return;
+    }
+
+    QTextStream out(&file);
+    QString plainLogs = m_logs;
+    plainLogs.replace(QRegularExpression("<font[^>]*>"), "");
+    plainLogs.replace("</font>", "");
+    plainLogs.replace("<br>", "\n");
+    out << plainLogs;
+    file.close();
+
+    appendLog("Logs exported successfully to: " + filePath);
+    setStatusMessage("Logs exported to " + filePath, false);
+}
+
 void KernelBridge::installKernel(const QString &name) {
-    appendLog("DEBUG: installKernel called for: " + name);
+    appendLog("Starting installation of kernel package: " + name);
     setBusy(true);
     setProgress(10);
-    
+
     auto future = QtConcurrent::run([this, name]() {
         std::string pkgName = name.toStdString();
         std::string headersPkg = pkgName + "-headers";
-        
-        // Intentamos instalar el kernel primero. Si falla, el proceso se detiene.
-        // Luego intentamos instalar los headers. Si fallan, no importa, continuamos.
-        std::string cmd = "pkexec sh -c \"xbps-install -y " + pkgName + " && (xbps-install -y " + headersPkg + " || true) && grub-mkconfig -o /boot/grub/grub.cfg\" 2>&1";
-        
+
+        std::string cmd = "pkexec sh -c \"xbps-install -y " + pkgName + " && (xbps-install -y " + headersPkg + " || true)\"";
         appendLog("Executing: " + QString::fromStdString(cmd));
 
-        FILE* pipe = popen(cmd.c_str(), "r");
-        bool success = false;
-        if (pipe) {
-            char buffer[256];
-            while (fgets(buffer, sizeof(buffer), pipe)) {
-                QString line = QString::fromLocal8Bit(buffer).trimmed();
-                QMetaObject::invokeMethod(this, [this, line]() { appendLog(line); });
-            }
-            success = (pclose(pipe) == 0);
+        auto result = utils::execWithOutput(cmd);
+        if (!result.stdout.empty()) {
+            appendLog(QString::fromStdString(result.stdout));
         }
+        if (!result.stderr.empty()) {
+            appendLog(QString::fromStdString(result.stderr));
+        }
+        bool success = (result.exitCode == 0);
 
-        QMetaObject::invokeMethod(this, [this, name, success]() {
-            setBusy(false);
+        QMetaObject::invokeMethod(this, [this, success, name]() {
             if (success) {
-                appendLog("Installation finished (headers might have been skipped if not found).");
+                appendLog("Kernel installation finished successfully: " + name);
                 setStatusMessage("Kernel installed successfully", false);
             } else {
-                appendLog("ERROR: Main kernel installation failed.");
+                appendLog("ERROR: Main kernel installation failed for " + name);
                 setStatusMessage("Installation failed", true);
             }
-            updateKernels();
-        });
-    });
-    (void)future;
-}
-
-void KernelBridge::removeKernel(const QString &name) {
-    setBusy(true);
-    auto future = QtConcurrent::run([this, name]() {
-        bool isManual = name.startsWith("linux-manual-");
-        std::string cmd;
-        if (isManual) {
-            std::string ver = name.toStdString().substr(13);
-            cmd = "pkexec sh -c \"rm -fv /boot/vmlinuz-" + ver + 
-                  " /boot/initramfs-" + ver + ".img && grub-mkconfig -o /boot/grub/grub.cfg\" 2>&1";
-        } else {
-            std::string pkgName = name.toStdString();
-            cmd = "pkexec sh -c \"xbps-remove -Rfy " + pkgName + 
-                  " && grub-mkconfig -o /boot/grub/grub.cfg\" 2>&1";
-        }
-        
-        utils::runPrivilegedCommand(cmd);
-        QMetaObject::invokeMethod(this, [this]() {
             setBusy(false);
             updateKernels();
+            updateDkmsModules();
+            updateDefaultKernel();
         });
     });
     (void)future;
 }
 
-void KernelBridge::cleanUninstalledTemplates() {
-    appendLog("Cleaning uninstalled custom kernel templates...");
-    
-    std::string home = utils::getRealHome();
-    std::string srcpkgsDir = home + "/.cache/neko-kernel-manager/void-packages/srcpkgs";
-    
-    if (!utils::dirExists(srcpkgsDir)) {
-        appendLog("No template directory found.");
-        return;
+// ----------------------------------------------------------------------------
+// removeKernel – CORREGIDA con detección de error por dependencias
+// ----------------------------------------------------------------------------
+void KernelBridge::removeKernel(const QString &name, const QString &type, const QString &version) {
+    bool isManual = (type.toLower() == "manual");
+    QString runningVer = activeKernelVersion().trimmed();
+    QString targetVersion = version;
+    if (targetVersion.isEmpty() && isManual && name.startsWith("linux-manual-")) {
+        targetVersion = name.mid(QString("linux-manual-").size());
     }
-    
-    QDir dir(QString::fromStdString(srcpkgsDir));
-    QStringList templates = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-    
-    int count = 0;
-    for (const QString &tmpl : templates) {
-        if (!tmpl.startsWith("kernel-neko-") && !tmpl.startsWith("linux-manual-")) continue;
-        
-        bool installed = false;
-        for (const QVariant &k : m_kernelsCache) {
-            if (k.toMap()["name"].toString() == tmpl) {
-                if (k.toMap()["installed"].toBool()) {
-                    installed = true;
-                    break;
+    if (targetVersion.isEmpty()) {
+        targetVersion = name;
+    }
+
+    if (!runningVer.isEmpty()) {
+        QString verToCheck = isManual ? targetVersion : name;
+        if (verToCheck.contains(runningVer) || runningVer.contains(verToCheck) || name.contains(runningVer)) {
+            appendLog("SECURITY WARNING: Attempted to uninstall currently running kernel (" + runningVer + "). Operation aborted. Reboot into a different kernel before removing it.");
+            setStatusMessage("Cannot remove currently running kernel! Reboot into another kernel first.", true);
+            return;
+        }
+    }
+
+    if (!isManual) {
+        std::string pkgName = name.toStdString();
+        if (!utils::packageInstalled(pkgName)) {
+            appendLog("WARNING: Package " + name + " is not actually installed. Switching to manual removal of files.");
+            isManual = true;
+            setStatusMessage("Package not installed; removing files manually.", false);
+        }
+    }
+
+    appendLog("Starting removal of kernel: " + name + " (Type: " + QString(isManual ? "Manual /boot" : "XBPS package") + ")");
+    setBusy(true);
+    setProgress(10);
+
+    auto future = QtConcurrent::run([this, name, type, targetVersion, isManual]() {
+        std::string cmd;
+        std::string tempScriptPath;
+        bool success = false;
+        bool dependencyError = false;
+
+        // Función auxiliar para borrar archivos manualmente (reutilizable)
+        auto removeFilesManually = [&](const std::string &ver) -> bool {
+            char tempPathTemplate[] = "/tmp/neko-kernel-remove-XXXXXX";
+            int fd = mkstemp(tempPathTemplate);
+            if (fd != -1) {
+                tempScriptPath = tempPathTemplate;
+                std::string script = "set -e\n"
+                                     "rm -f /boot/vmlinuz-" + ver +
+                                     " /boot/initramfs-" + ver + ".img /boot/initrd.img-" + ver +
+                                     " /boot/config-" + ver + " /boot/System.map-" + ver +
+                                     " /boot/vmlinuz-" + ver + ".old /boot/initramfs-" + ver + ".old.img\n"
+                                     "rm -rf /usr/lib/modules/" + ver + " /lib/modules/" + ver + "\n"
+                                     "(which grub-mkconfig >/dev/null 2>&1 && grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1 || true)\n";
+                ssize_t bytesWritten = write(fd, script.c_str(), script.size());
+                (void)bytesWritten;
+                (void)fchmod(fd, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+                close(fd);
+                cmd = "pkexec sh " + tempScriptPath;
+            } else {
+                cmd = "pkexec sh -c \"if [ -n '" + ver + "' ]; then "
+                      "rm -f /boot/vmlinuz-" + ver +
+                      " /boot/initramfs-" + ver + ".img /boot/initrd.img-" + ver +
+                      " /boot/config-" + ver + " /boot/System.map-" + ver +
+                      " /boot/vmlinuz-" + ver + ".old /boot/initramfs-" + ver + ".old.img; "
+                      "rm -rf /usr/lib/modules/" + ver + " /lib/modules/" + ver + "; "
+                      "(which grub-mkconfig >/dev/null 2>&1 && grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1 || true); "
+                      "fi\"";
+            }
+            appendLog("Executing manual removal: " + QString::fromStdString(cmd));
+            bool ok = utils::runPrivilegedCommand(cmd);
+            if (!tempScriptPath.empty()) {
+                unlink(tempScriptPath.c_str());
+                tempScriptPath.clear();
+            }
+            return ok;
+        };
+
+        if (isManual) {
+            // Ya es manual, borrar archivos directamente
+            std::string ver = targetVersion.toStdString();
+            success = removeFilesManually(ver);
+        } else {
+            // Intentar eliminar con xbps-remove
+            std::string pkgName = name.toStdString();
+            cmd = "pkexec sh -c \"xbps-remove -Rfy " + pkgName + " && (which grub-mkconfig >/dev/null 2>&1 && grub-mkconfig -o /boot/grub/grub.cfg || true)\"";
+            appendLog("Executing xbps-remove: " + QString::fromStdString(cmd));
+            auto result = utils::execWithOutput(cmd);
+            if (!result.stdout.empty()) {
+                appendLog(QString::fromStdString(result.stdout));
+            }
+            if (!result.stderr.empty()) {
+                appendLog(QString::fromStdString(result.stderr));
+            }
+            success = (result.exitCode == 0);
+
+            // Si falló, comprobar si fue por dependencias
+            if (!success) {
+                std::string output = result.stdout + result.stderr;
+                if (output.find("breaks installed pkg") != std::string::npos ||
+                    output.find("dependency") != std::string::npos ||
+                    output.find("Transaction aborted") != std::string::npos) {
+                    dependencyError = true;
+                    appendLog("Kernel removal failed due to package dependencies. The package will remain installed, but its files will be removed.");
+                    setStatusMessage("Dependency conflict: removing files only, keeping package.", false);
+                    // Borrar archivos manualmente
+                    std::string ver = targetVersion.toStdString();
+                    success = removeFilesManually(ver);
                 }
             }
         }
-        
-        if (!installed) {
-            utils::runCommand("rm -rf " + srcpkgsDir + "/" + tmpl.toStdString());
-            appendLog("Removed template: " + tmpl);
-            count++;
-        }
-    }
-    
-    appendLog("Cleaned " + QString::number(count) + " uninstalled templates.");
-    updateKernels();
+
+        QMetaObject::invokeMethod(this, [this, success, name, dependencyError]() {
+            if (success) {
+                if (dependencyError) {
+                    appendLog("Kernel files removed successfully. Package " + name + " remains installed (without files).");
+                    setStatusMessage("Kernel files removed (package kept due to dependencies)", false);
+                } else {
+                    appendLog("Kernel removal completed successfully: " + name);
+                    setStatusMessage("Kernel removed successfully", false);
+                }
+            } else {
+                appendLog("ERROR: Kernel removal failed for " + name);
+                setStatusMessage("Removal failed", true);
+            }
+            setBusy(false);
+            updateKernels();
+            updateDkmsModules();
+            updateDefaultKernel();
+        });
+    });
+    (void)future;
 }
 
 void KernelBridge::vkpurge() {
-    appendLog("Starting vkpurge rm all...");
+    appendLog("Initiating vkpurge rm all to remove all old unreferenced kernels...");
     setBusy(true);
     setProgress(10);
     setStatusMessage("Purging all old kernels...", false);
     auto future = QtConcurrent::run([this]() {
-        std::string cmd = "pkexec sh -c \"vkpurge rm all && grub-mkconfig -o /boot/grub/grub.cfg\" 2>&1";
+        std::string cmd = "pkexec sh -c \"vkpurge rm all && (which grub-mkconfig >/dev/null 2>&1 && grub-mkconfig -o /boot/grub/grub.cfg || true)\"";
 
         QMetaObject::invokeMethod(this, [this]() {
             setProgress(30);
-            setStatusMessage("Running vkpurge and updating GRUB...", false);
+            setStatusMessage("Running vkpurge...", false);
         });
 
-        FILE* pipe = popen(cmd.c_str(), "r");
-        bool success = false;
-        if (pipe) {
-            char buffer[256];
-            while (fgets(buffer, sizeof(buffer), pipe)) {
-                QString line = QString::fromLocal8Bit(buffer).trimmed();
-                QMetaObject::invokeMethod(this, [this, line]() { 
-                    appendLog(line); 
-                    if (line.contains("Removing")) setProgress(60);
-                    else if (line.contains("Generating grub configuration file")) setProgress(90);
-                });
-            }
-            success = (pclose(pipe) == 0);
+        auto result = utils::execWithOutput(cmd);
+        if (!result.stdout.empty()) {
+            appendLog(QString::fromStdString(result.stdout));
         }
+        if (!result.stderr.empty()) {
+            appendLog(QString::fromStdString(result.stderr));
+        }
+        bool success = (result.exitCode == 0);
 
         QMetaObject::invokeMethod(this, [this, success]() {
             setBusy(false);
             setProgress(success ? 100 : 0);
             if (success) {
-                appendLog("vkpurge completed and GRUB updated.");
+                appendLog("vkpurge completed successfully.");
                 setStatusMessage("Old kernels purged successfully", false);
                 emit operationFinished("Kernels purged");
             } else {
-                appendLog("vkpurge failed or no kernels to purge.");
-                setStatusMessage("vkpurge finished", false);
-                emit operationFinished("vkpurge finished");
+                appendLog("ERROR: vkpurge failed.");
+                setStatusMessage("vkpurge failed", true);
             }
+            setBusy(false);
             updateKernels();
+            updateDkmsModules();
+            updateDefaultKernel();
         });
     });
     (void)future;
 }
 
-void KernelBridge::fetchKernelOrgVersions(const QString &variant) {
-    setBusy(true);
-    auto future = QtConcurrent::run([this, variant]() {
-        auto versions = utils::fetchKernelOrgVersions(variant.toStdString());
-        QStringList qlist;
-        for (const auto &v : versions) qlist << QString::fromStdString(v);
-        
-        QMetaObject::invokeMethod(this, [this, qlist]() {
-            m_kernelOrgVersions = qlist;
-            setBusy(false);
-            emit kernelOrgVersionsChanged();
-        });
-    });
-    (void)future;
-}
+// DKMS Management Implementation
+QVariantList KernelBridge::getDkmsModulesInternal() {
+    QVariantList list;
 
-void KernelBridge::downloadKernelOrg(const QString &variant, const QString &version) {
-    setBusy(true);
-    setProgress(5);
-    auto future = QtConcurrent::run([this, variant, version]() {
-        std::string v = version.toStdString();
-        std::string var = variant.toStdString();
-        std::string pkgName = "kernel-neko-" + var + "-" + v;
-        
-        QMetaObject::invokeMethod(this, [this, pkgName]() {
-            setTargetTemplate(QString::fromStdString(pkgName));
-            setStatusMessage("Initializing environment...", false);
-            setProgress(10);
-        });
-
-        std::string home = utils::getRealHome();
-        std::string voidPackagesDir = home + "/.cache/neko-kernel-manager/void-packages";
-        
-        if (!utils::dirExists(voidPackagesDir)) {
-             QMetaObject::invokeMethod(this, [this]() {
-                 appendLog("void-packages not found. Cloning repository...");
-                 setStatusMessage("Cloning void-packages repository (this may take a while)...", false);
-                 setProgress(20);
-             });
-             utils::runCommand("mkdir -p " + home + "/.cache/neko-kernel-manager");
-             bool cloned = utils::gitClone("https://github.com/void-linux/void-packages.git", voidPackagesDir);
-              
-             if (!cloned || !utils::dirExists(voidPackagesDir)) {
-                 QMetaObject::invokeMethod(this, [this, voidPackagesDir]() {
-                     appendLog("ERROR: Failed to clone void-packages to " + QString::fromStdString(voidPackagesDir));
-                     setStatusMessage("Failed to clone void-packages. Check logs.", true);
-                     setBusy(false);
-                     setProgress(0);
-                 });
-                 return;
-             }
-
-             QMetaObject::invokeMethod(this, [this]() {
-                 appendLog("Bootstrapping xbps-src...");
-                 setStatusMessage("Bootstrapping xbps-src...", false);
-                 setProgress(50);
-             });
-             utils::runCommand("cd " + voidPackagesDir + " && ./xbps-src binary-bootstrap");
-        }
-
-        QMetaObject::invokeMethod(this, [this, pkgName]() {
-            appendLog("Preparing template for " + QString::fromStdString(pkgName) + "...");
-            setStatusMessage("Preparing template...", false);
-            setProgress(70);
-        });
-        
-        std::string srcpkgsDir = voidPackagesDir + "/srcpkgs/" + pkgName;
-        utils::runCommand("mkdir -p " + srcpkgsDir);
-        
-        std::string url = utils::kernelOrgDownloadUrl(var, v);
-        appendLog("Downloading kernel source from: " + QString::fromStdString(url));
-        
-        std::string ltoStr = m_lto ? "yes" : "no";
-        std::string zramTypeStr = m_zramType.toStdString();
-        std::string optLevelStr = m_optLevel.toStdString();
-        std::string extraFlagsStr = m_extraFlags.toStdString();
-        
-        appendLog(QString("Generating template with optimizations: CPU=%1, OPT=%2, LTO=%3, ZRAM=%4, EXTRA_FLAGS='%5'")
-                  .arg(m_cpuOpt)
-                  .arg(m_optLevel)
-                  .arg(m_lto ? "Yes" : "No")
-                  .arg(m_zramType)
-                  .arg(m_extraFlags));
-
-        std::string templateContent = "pkgname=" + pkgName + "\n"
-                                     "version=" + v + "\n"
-                                     "revision=1\n"
-                                     "nodebug=yes\n"
-                                     "short_desc=\"Custom " + var + " kernel " + v + " for Void Linux (Neko)\"\n"
-                                     "maintainer=\"NekoKernelManager <admin@neko.local>\"\n"
-                                     "license=\"GPL-2.0-only\"\n"
-                                     "homepage=\"https://www.kernel.org\"\n"
-                                     "distfiles=\"" + url + "\"\n"
-                                     "checksum=SKIP\n"
-                                     "create_wrksrc=yes\n"
-                                     "triggers=\"kernel-hooks\"\n"
-                                     "kernel_hooks_version=\"" + v + "_1\"\n\n"
-                                     "case \"$XBPS_TARGET_MACHINE\" in\n"
-                                     "    x86_64*) _arch=x86_64;;\n"
-                                     "    i686*) _arch=x86;;\n"
-                                     "esac\n\n"
-                                     "do_build() {\n"
-                                     "    export KCFLAGS=\"-march=" + m_cpuOpt.toStdString() + " -" + optLevelStr + "\"\n"
-                                     "    if [ \"" + ltoStr + "\" = \"yes\" ]; then export KCFLAGS=\"$KCFLAGS -flto\"; fi\n"
-                                     "    if [ -n \"" + extraFlagsStr + "\" ]; then export KCFLAGS=\"$KCFLAGS " + extraFlagsStr + "\"; fi\n"
-                                     "    cd linux-" + v + "\n"
-                                     "    make olddefconfig\n"
-                                     "    make -j$(nproc)\n"
-                                     "}\n\n"
-                                     "do_install() {\n"
-                                     "    cd linux-" + v + "\n"
-                                     "    vmkdir boot\n"
-                                     "    vmkdir usr/lib/modules\n"
-                                     "    cp arch/${_arch}/boot/bzImage ${DESTDIR}/boot/vmlinuz-${version}_1\n"
-                                     "    make modules_install INSTALL_MOD_PATH=${DESTDIR}/usr\n"
-                                     "    if [ -d ${DESTDIR}/usr/lib/modules ]; then\n"
-                                     "        cp -a ${DESTDIR}/usr/lib/modules/* ${DESTDIR}/usr/lib/modules/ 2>/dev/null || true\n"
-                                     "    fi\n"
-                                     "    if [ \"" + zramTypeStr + "\" != \"none\" ]; then\n"
-                                     "        mkdir -p ${DESTDIR}/etc/modprobe.d\n"
-                                     "        cat > ${DESTDIR}/etc/modprobe.d/zram.conf <<'EOF'\n"
-                                     "options zram compression=" + zramTypeStr + "\n"
-                                     "EOF\n"
-                                     "    fi\n"
-                                     "}\n";
-
-        QFile file(QString::fromStdString(srcpkgsDir + "/template"));
-        if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-            QTextStream out(&file);
-            out << QString::fromStdString(templateContent);
-            file.close();
-        }
-
-        QMetaObject::invokeMethod(this, [this]() {
-            appendLog("Downloading kernel source and generating checksum...");
-            setStatusMessage("Downloading kernel...", false);
-            setProgress(85);
-        });
-
-        std::string distfilesDir = voidPackagesDir + "/hostdir/sources/" + pkgName + "-" + v;
-        utils::runCommand("mkdir -p " + distfilesDir);
-        std::string destFile = distfilesDir + "/linux-" + v + ".tar.xz";
-        
-        bool downloadSuccess = utils::downloadFile(url, destFile);
-        if (!downloadSuccess) {
-             QMetaObject::invokeMethod(this, [this]() {
-                 appendLog("ERROR: Failed to download kernel source.");
-                 setStatusMessage("Download failed", true);
-                 setBusy(false);
-                 setProgress(0);
-             });
-             return;
-        }
-
-        std::string sha256 = utils::exec("sha256sum " + destFile + " | cut -d' ' -f1");
-        if (sha256.length() != 64) {
-             QMetaObject::invokeMethod(this, [this]() {
-                 appendLog("ERROR: Failed to generate checksum.");
-                 setStatusMessage("Checksum failed", true);
-                 setBusy(false);
-                 setProgress(0);
-             });
-             return;
-        }
-
-        appendLog("Generated SHA256: " + QString::fromStdString(sha256));
-        
-        utils::runCommand("sed -i 's/checksum=SKIP/checksum=" + sha256 + "/' " + srcpkgsDir + "/template");
-
-        QMetaObject::invokeMethod(this, [this, pkgName]() {
-            appendLog("Kernel prepared successfully: " + QString::fromStdString(pkgName));
-            setBusy(false);
-            setProgress(100);
-            setStatusMessage("Kernel prepared: " + QString::fromStdString(pkgName), false);
-            emit operationFinished("Template prepared");
-        });
-    });
-    (void)future;
-}
-
-void KernelBridge::cloneCustomGit(const QString &url) {
-    setBusy(true);
-    auto future = QtConcurrent::run([this, url]() {
-        bool isTarball = url.endsWith(".tar.gz") || url.endsWith(".tar.xz") || url.endsWith(".tgz") || url.contains("/releases/download/");
-        QString message;
-        std::string home = utils::getRealHome();
-        std::string voidPackagesDir = home + "/.cache/neko-kernel-manager/void-packages";
-        
-        std::string pkgName = "kernel-neko-custom";
-        if (url.contains("/")) {
-            std::string last = url.toStdString().substr(url.toStdString().find_last_of("/") + 1);
-            if (last.find(".") != std::string::npos) last = last.substr(0, last.find("."));
-            pkgName = "kernel-neko-" + last;
-        }
-
-        QMetaObject::invokeMethod(this, [this, pkgName]() {
-            setTargetTemplate(QString::fromStdString(pkgName));
-        });
-
-        if (!utils::dirExists(voidPackagesDir)) {
-             utils::runCommand("mkdir -p " + home + "/.cache/neko-kernel-manager");
-             utils::gitClone("https://github.com/void-linux/void-packages.git", voidPackagesDir);
-             utils::runCommand("cd " + voidPackagesDir + " && ./xbps-src binary-bootstrap");
-        }
-
-        std::string srcpkgsDir = voidPackagesDir + "/srcpkgs/" + pkgName;
-        utils::runCommand("mkdir -p " + srcpkgsDir);
-
-        if (isTarball) {
-            std::string templateContent = "pkgname=" + pkgName + "\n"
-                                         "version=1.0.0\n"
-                                         "revision=1\n"
-                                         "nodebug=yes\n"
-                                         "short_desc=\"Custom precompiled kernel from tarball (Neko)\"\n"
-                                         "maintainer=\"NekoKernelManager <admin@neko.local>\"\n"
-                                         "license=\"GPL-2.0-only\"\n"
-                                         "homepage=\"" + url.toStdString() + "\"\n"
-                                         "distfiles=\"" + url.toStdString() + "\"\n"
-                                         "checksum=SKIP\n"
-                                         "create_wrksrc=yes\n"
-                                         "triggers=\"kernel-hooks\"\n"
-                                         "kernel_hooks_version=\"1.0.0_1\"\n\n"
-                                         "do_install() {\n"
-                                         "    vmkdir boot\n"
-                                         "    vmkdir usr/lib/modules\n"
-                                         "    cp -a boot/* ${DESTDIR}/boot/\n"
-                                         "    cp -a lib/modules/* ${DESTDIR}/usr/lib/modules/\n"
-                                         "}\n";
-
-            QFile file(QString::fromStdString(srcpkgsDir + "/template"));
-            if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                QTextStream out(&file);
-                out << QString::fromStdString(templateContent);
-                file.close();
+    auto parseXbpsPackage = [](const std::string &fullPkg, std::string &outName, std::string &outVer) -> bool {
+        if (fullPkg.empty()) return false;
+        size_t pos = std::string::npos;
+        for (size_t i = fullPkg.size(); i > 0; --i) {
+            if (fullPkg[i - 1] == '-' && i < fullPkg.size() && std::isdigit(fullPkg[i])) {
+                pos = i - 1;
+                break;
             }
-            
-            utils::runCommand("cd " + voidPackagesDir + " && ./xbps-src digest " + pkgName);
-            message = "Custom tarball prepared and verified: " + QString::fromStdString(pkgName);
-        } else {
-            std::string templateContent = "pkgname=" + pkgName + "\n"
-                                         "version=git\n"
-                                         "revision=1\n"
-                                         "nodebug=yes\n"
-                                         "short_desc=\"Custom kernel from Git source (Neko)\"\n"
-                                         "maintainer=\"NekoKernelManager <admin@neko.local>\"\n"
-                                         "license=\"GPL-2.0-only\"\n"
-                                         "homepage=\"" + url.toStdString() + "\"\n"
-                                         "distfiles=\"" + url.toStdString() + "\"\n"
-                                         "create_wrksrc=yes\n"
-                                         "triggers=\"kernel-hooks\"\n"
-                                         "kernel_hooks_version=\"git_1\"\n\n"
-                                         "do_build() {\n"
-                                         "    make oldconfig\n"
-                                         "    make -j$(nproc)\n"
-                                         "}\n\n"
-                                         "do_install() {\n"
-                                         "    vmkdir boot\n"
-                                         "    vmkdir usr/lib/modules\n"
-                                         "    cp arch/x86/boot/bzImage ${DESTDIR}/boot/vmlinuz-git_1\n"
-                                         "    make modules_install INSTALL_MOD_PATH=${DESTDIR}/usr\n"
-                                         "}\n";
-
-            QFile file(QString::fromStdString(srcpkgsDir + "/template"));
-            if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-                QTextStream out(&file);
-                out << QString::fromStdString(templateContent);
-                file.close();
-            }
-            message = "Git source template prepared: " + QString::fromStdString(pkgName);
         }
-        
-        QMetaObject::invokeMethod(this, [this, message]() {
-            setBusy(false);
-            setStatusMessage(message, false);
-            emit operationFinished(message);
-            updateKernels();
-        });
-    });
-    (void)future;
-}
+        if (pos == std::string::npos) return false;
+        outName = fullPkg.substr(0, pos);
+        outVer = fullPkg.substr(pos + 1);
+        return !outName.empty() && !outVer.empty();
+    };
 
-static std::string resolveKernelSourceTemplate(const std::string &sourceTemplate) {
-    if (sourceTemplate == "linux" || sourceTemplate == "linux-lts" || sourceTemplate == "linux-zen" || sourceTemplate == "linux-rt" || sourceTemplate == "linux-mainline") {
-        return sourceTemplate;
+    auto normalizeDkmsName = [](const QString &name) -> QString {
+        QString normalized = name.toLower();
+        if (normalized.endsWith("-dkms")) {
+            normalized.chop(5);
+            int lastDash = normalized.lastIndexOf('-');
+            if (lastDash != -1) {
+                QString suffix = normalized.mid(lastDash + 1);
+                bool allDigits = true;
+                for (int i = 0; i < suffix.size(); ++i) {
+                    if (!suffix[i].isDigit()) {
+                        allDigits = false;
+                        break;
+                    }
+                }
+                if (allDigits) normalized = normalized.left(lastDash);
+            }
+        }
+        return normalized;
+    };
+
+    // 1. Get installed/registered DKMS modules from local status
+    QMap<QString, QVariantMap> activeModules;
+    if (utils::commandExists("dkms")) {
+        std::string rawOutput = utils::exec("dkms status 2>&1");
+        if (!rawOutput.empty()) {
+            std::vector<std::string> lines = utils::split(rawOutput, '\n');
+            for (const auto &line_raw : lines) {
+                if (line_raw.empty()) continue;
+                QString line = QString::fromStdString(line_raw).trimmed();
+
+                int colonIdx = line.indexOf(':');
+                if (colonIdx == -1) continue;
+
+                QString infoPart = line.left(colonIdx).trimmed();
+                QString statusPart = line.mid(colonIdx + 1).trimmed();
+
+                QStringList parts = infoPart.split(',');
+                if (parts.size() < 2) continue;
+
+                QString modAndVer = parts[0].trimmed();
+                QString kernelVer = parts[1].trimmed();
+                QString arch = parts.size() >= 3 ? parts[2].trimmed() : "all";
+
+                int slashIdx = modAndVer.indexOf('/');
+                QString modName = (slashIdx != -1) ? modAndVer.left(slashIdx) : modAndVer;
+                QString modVersion = (slashIdx != -1) ? modAndVer.mid(slashIdx + 1) : "unknown";
+
+                QVariantMap map;
+                map["name"] = modName;
+                map["version"] = modVersion;
+                map["kernel"] = kernelVer;
+                map["arch"] = arch;
+                map["status"] = statusPart; // e.g. "installed", "built", "added"
+                map["isDkmsPackage"] = false; // Registered local module
+                map["packageInstalled"] = true;
+
+                activeModules[normalizeDkmsName(modName) + "-" + kernelVer] = map;
+                list.append(map);
+            }
+        }
     }
-    if (sourceTemplate.rfind("linux-lts-", 0) == 0) return "linux-lts";
-    if (sourceTemplate.rfind("linux-zen-", 0) == 0) return "linux-zen";
-    if (sourceTemplate.rfind("linux-rt-", 0) == 0) return "linux-rt";
-    if (sourceTemplate.rfind("linux-mainline-", 0) == 0) return "linux-mainline";
-    if (sourceTemplate.rfind("linux-", 0) == 0) return "linux";
-    return sourceTemplate;
+
+    // 2. Query installed and available DKMS packages from XBPS repositories in Void Linux
+    if (utils::commandExists("xbps-query")) {
+        std::string installedXbps = utils::exec("xbps-query -l | grep 'dkms' | awk '{print $2}'");
+        std::string availableXbps = utils::exec("xbps-query -Rs 'dkms' | awk '{print $2}'");
+        std::vector<std::string> xbpsLines;
+
+        for (const auto &line : utils::split(installedXbps, '\n')) {
+            if (!line.empty()) xbpsLines.push_back("ii " + line);
+        }
+        for (const auto &line : utils::split(availableXbps, '\n')) {
+            if (!line.empty()) xbpsLines.push_back(line);
+        }
+
+        std::set<std::string> processedPkgs;
+
+        for (const auto &xbpsLine : xbpsLines) {
+            if (xbpsLine.empty()) continue;
+            std::istringstream iss(xbpsLine);
+            std::string status;
+            std::string fullPkg;
+            iss >> status >> fullPkg;
+            if (fullPkg.empty()) {
+                fullPkg = status;
+                status.clear();
+            }
+
+            std::string pkgName;
+            std::string pkgVersion;
+            if (!parseXbpsPackage(fullPkg, pkgName, pkgVersion)) continue;
+
+            if (pkgName.find("dkms") == std::string::npos || pkgName == "dkms") continue;
+            if (processedPkgs.count(pkgName)) continue;
+            processedPkgs.insert(pkgName);
+
+            bool isInstalled = (status == "[*]" || status == "ii");
+
+            QString modName = QString::fromStdString(pkgName);
+            QString normalizedPackage = normalizeDkmsName(modName);
+
+            bool alreadyRegistered = false;
+            for (auto it = activeModules.constBegin(); it != activeModules.constEnd(); ++it) {
+                if (it.key().startsWith(normalizedPackage + "-")) {
+                    alreadyRegistered = true;
+                    break;
+                }
+            }
+
+            QVariantMap map;
+            map["name"] = QString::fromStdString(pkgName); // Full package name
+            map["version"] = QString::fromStdString(pkgVersion);
+            map["kernel"] = ""; // Package entries are repo/package-level, not per-registered kernel
+            map["arch"] = "all";
+            map["status"] = isInstalled ? "unregistered" : "not installed";
+            map["isDkmsPackage"] = true; // Flag for package management
+            map["packageInstalled"] = isInstalled;
+            if (!alreadyRegistered) {
+                list.append(map);
+            } else if (!isInstalled) {
+                list.append(map);
+            }
+        }
+    }
+
+    return list;
 }
 
-void KernelBridge::buildKernel(const QString &templateName) {
-    appendLog("DEBUG: buildKernel called for: " + templateName);
+void KernelBridge::updateDkmsModules() {
     setBusy(true);
-    setProgress(5);
-    
-    auto future = QtConcurrent::run([this, templateName]() {
-        std::string home = utils::getRealHome();
-        std::string voidPackagesDir = home + "/.cache/neko-kernel-manager/void-packages";
-        std::string name = templateName.toStdString();
-        std::string sourceTmpl = m_sourceTemplate.toStdString();
-
-        if (!utils::dirExists(voidPackagesDir + "/common")) {
-             QMetaObject::invokeMethod(this, [this]() { appendLog("Void-packages environment missing. Setting up bootstrap..."); });
-             utils::runCommand("mkdir -p " + home + "/.cache/neko-kernel-manager");
-             utils::gitClone("https://github.com/void-linux/void-packages.git", voidPackagesDir);
-             utils::runCommand("cd " + voidPackagesDir + " && ./xbps-src binary-bootstrap");
-        }
-
-        if (sourceTmpl.empty()) {
-            QMetaObject::invokeMethod(this, [this]() {
-                appendLog("ERROR: No source kernel selected for template generation.");
-                setStatusMessage("Select a source kernel before building.", true);
-                setBusy(false);
-                setProgress(0);
-            });
-            return;
-        }
-
-        std::string sourceBase = resolveKernelSourceTemplate(sourceTmpl);
-        std::string srcPath = voidPackagesDir + "/srcpkgs/" + sourceBase;
-
-        QMetaObject::invokeMethod(this, [this, sourceBase]() {
-            appendLog("Using source template: " + QString::fromStdString(sourceBase));
-        });
-
-        if (!utils::dirExists(srcPath)) {
-            QMetaObject::invokeMethod(this, [this, sourceBase]() {
-                appendLog("Source template " + QString::fromStdString(sourceBase) + " not found. Searching for fallback...");
-            });
-            std::string fallback = utils::exec("ls " + voidPackagesDir + "/srcpkgs | grep '^linux[0-9]\\+\\.[0-9]\\+$' | sort -V | tail -n 1");
-            if (!fallback.empty()) {
-                QMetaObject::invokeMethod(this, [this, fallback]() {
-                    appendLog("Found fallback versioned template: " + QString::fromStdString(fallback));
-                });
-                srcPath = voidPackagesDir + "/srcpkgs/" + fallback;
-                sourceBase = fallback;
-            } else if (utils::dirExists(voidPackagesDir + "/srcpkgs/linux")) {
-                QMetaObject::invokeMethod(this, [this]() {
-                    appendLog("Using default 'linux' template as fallback.");
-                });
-                srcPath = voidPackagesDir + "/srcpkgs/linux";
-                sourceBase = "linux";
+    appendLog("Scanning DKMS modules and packages...");
+    if (!utils::commandExists("dkms")) {
+        appendLog("WARNING: 'dkms' command not found; local DKMS module detection is disabled.");
+    }
+    if (!utils::commandExists("xbps-query")) {
+        appendLog("WARNING: 'xbps-query' command not found; Void DKMS package repository scan is disabled.");
+    }
+    auto future = QtConcurrent::run([this]() {
+        auto dkmsList = getDkmsModulesInternal();
+        QMetaObject::invokeMethod(this, [this, dkmsList]() {
+            m_dkmsCache = dkmsList;
+            setBusy(false);
+            emit dkmsModulesChanged();
+            appendLog(QString("DKMS scan completed. Found %1 modules/packages:").arg(dkmsList.size()));
+            for (const auto &var : dkmsList) {
+                QVariantMap m = var.toMap();
+                appendLog(QString("  • %1 v%2 (Kernel: %3) [Status: %4]")
+                            .arg(m["name"].toString())
+                            .arg(m["version"].toString())
+                            .arg(m["kernel"].toString())
+                            .arg(m["status"].toString()));
             }
-        }
+        });
+    });
+    (void)future;
+}
 
-        if (!utils::dirExists(srcPath)) {
-            QMetaObject::invokeMethod(this, [this, srcPath]() {
-                appendLog("ERROR: Source template path not found: " + QString::fromStdString(srcPath));
-                setStatusMessage("Official kernel template not found in void-packages.", true);
-                setBusy(false);
-                setProgress(0);
-            });
-            return;
-        }
+void KernelBridge::installDkmsModule(const QString &name, const QString &version, const QString &kernel) {
+    bool isPackage = name.endsWith("-dkms");
+    if (isPackage) {
+        appendLog("Starting installation of XBPS DKMS package: " + name);
+    } else {
+        appendLog("Starting installation of DKMS module: " + name + " v" + version + " for kernel " + kernel);
+    }
+    setBusy(true);
 
-        std::string destPath = voidPackagesDir + "/srcpkgs/" + name;
+    auto future = QtConcurrent::run([this, name, version, kernel, isPackage]() {
+        bool success = true;
+        bool isNvidia = name.toLower().contains("nvidia");
 
-        if (srcPath != destPath) {
-            utils::runCommand("rm -rf " + destPath);
-            if (!utils::runCommand("cp -r " + srcPath + " " + destPath)) {
-                QMetaObject::invokeMethod(this, [this, srcPath]() {
-                    appendLog("ERROR: Failed to copy source template from " + QString::fromStdString(srcPath));
-                    setStatusMessage("Failed to prepare template directory.", true);
-                    setBusy(false);
-                    setProgress(0);
-                });
-                return;
+        if (isPackage) {
+            // Instalar paquete xbps
+            std::string cmd = "pkexec xbps-install -y " + name.toStdString();
+            appendLog("Executing xbps-install: " + QString::fromStdString(cmd));
+            auto result = utils::execWithOutput(cmd);
+            if (!result.stdout.empty()) {
+                appendLog(QString::fromStdString(result.stdout));
+            }
+            if (!result.stderr.empty()) {
+                appendLog(QString::fromStdString(result.stderr));
+            }
+            success = (result.exitCode == 0);
+            if (success) {
+                appendLog("XBPS DKMS package installed: " + name);
+            } else {
+                appendLog("ERROR: XBPS DKMS package installation failed for " + name);
             }
         } else {
-            QMetaObject::invokeMethod(this, [this]() {
-                appendLog("Target name matches source template. Using existing template without copying.");
-            });
+            // Instalar módulo DKMS manualmente
+            std::string cmd = "pkexec dkms install -m " + name.toStdString() +
+                              " -v " + version.toStdString() +
+                              " -k " + kernel.toStdString();
+            appendLog("Executing dkms install: " + QString::fromStdString(cmd));
+            auto result = utils::execWithOutput(cmd);
+            if (!result.stdout.empty()) {
+                appendLog(QString::fromStdString(result.stdout));
+            }
+            if (!result.stderr.empty()) {
+                appendLog(QString::fromStdString(result.stderr));
+            }
+            success = (result.exitCode == 0);
         }
 
-        // Usamos el script externo para parchear la plantilla de forma segura
-        std::string patchScript = utils::getRealHome() + "/Neko-Kernel-Manager/patch_template.sh";
-        if (!utils::runCommand(patchScript + " " + destPath + "/template " + sourceBase + " " + name)) {
-             QMetaObject::invokeMethod(this, [this]() {
-                appendLog("ERROR: Failed to patch the template file.");
-                setStatusMessage("Template patching failed.", true);
-                setBusy(false);
-                setProgress(0);
-            });
-            return;
-        }
-
-        std::string buildCmd = "env -u XBPS_DISTDIR bash -c \"cd " + voidPackagesDir + " && ./xbps-src pkg " + name + "\" 2>&1";
-        
-        QMetaObject::invokeMethod(this, [this]() { 
-            appendLog("Starting compilation via xbps-src..."); 
-            setProgress(15);
-        });
-
-        // Movemos QProcess al scope del futuro para que no se destruya prematuramente
-        QProcess* process = new QProcess();
-        process->setProcessChannelMode(QProcess::MergedChannels);
-        process->start(QString::fromStdString(buildCmd));
-
-        while (process->state() == QProcess::Running || process->canReadLine()) {
-            if (process->waitForReadyRead(100)) {
-                while (process->canReadLine()) {
-                    QByteArray data = process->readLine();
-                    QString line = QString::fromLocal8Bit(data).trimmed();
-                    if (!line.isEmpty()) {
-                        QMetaObject::invokeMethod(this, [this, line]() { 
-                            appendLog(line); 
-                        });
+        // Manejo especial para NVIDIA si se instaló el paquete y es NVIDIA
+        if (isNvidia && success && isPackage) {
+            // Forzar instalación para kernels compatibles (>=6.18)
+            std::string nvidiaVersion;
+            std::string srcRoot = "/usr/src";
+            if (std::filesystem::exists(srcRoot) && std::filesystem::is_directory(srcRoot)) {
+                for (const auto &entry : std::filesystem::directory_iterator(srcRoot)) {
+                    if (!entry.is_directory()) continue;
+                    std::string nameStr = entry.path().filename().string();
+                    if (nameStr.rfind("nvidia-", 0) == 0) {
+                        nvidiaVersion = nameStr.substr(strlen("nvidia-"));
+                        break;
                     }
                 }
             }
-            QThread::msleep(40);
+            if (nvidiaVersion.empty()) {
+                nvidiaVersion = version.toStdString();
+                size_t underscorePos = nvidiaVersion.find('_');
+                if (underscorePos != std::string::npos) {
+                    nvidiaVersion = nvidiaVersion.substr(0, underscorePos);
+                }
+            }
+            if (!nvidiaVersion.empty()) {
+                std::string modulesRoot = "/usr/lib/modules";
+                if (!utils::dirExists(modulesRoot)) {
+                    modulesRoot = "/lib/modules";
+                }
+                if (utils::dirExists(modulesRoot)) {
+                    bool installedAny = false;
+                    for (const auto &entry : std::filesystem::directory_iterator(modulesRoot)) {
+                        if (!entry.is_directory()) continue;
+                        std::string kernelDir = entry.path().filename().string();
+                        if (kernelDir.empty()) continue;
+
+                        std::string versionStr;
+                        for (char c : kernelDir) {
+                            if (std::isdigit(c) || c == '.') versionStr.push_back(c);
+                            else break;
+                        }
+
+                        bool needsForce = false;
+                        if (!versionStr.empty()) {
+                            std::vector<int> parts;
+                            std::stringstream ss(versionStr);
+                            std::string part;
+                            while (std::getline(ss, part, '.')) {
+                                if (part.empty()) break;
+                                parts.push_back(std::stoi(part));
+                            }
+                            if (!parts.empty()) {
+                                if (parts[0] > 6 || (parts[0] == 6 && parts.size() > 1 && parts[1] >= 18)) {
+                                    needsForce = true;
+                                }
+                            }
+                        }
+                        if (!needsForce) continue;
+
+                        std::string dkmsCmd = "pkexec dkms install -m nvidia -v " + nvidiaVersion + " -k " + kernelDir;
+                        appendLog("Forcing NVIDIA DKMS install for kernel " + QString::fromStdString(kernelDir));
+                        auto result2 = utils::execWithOutput(dkmsCmd);
+                        if (!result2.stdout.empty()) {
+                            appendLog(QString::fromStdString(result2.stdout));
+                        }
+                        if (!result2.stderr.empty()) {
+                            appendLog(QString::fromStdString(result2.stderr));
+                        }
+                        if (result2.exitCode == 0) {
+                            installedAny = true;
+                        }
+                    }
+                    if (!installedAny) {
+                        appendLog("WARNING: No NVIDIA kernel directories requiring forced install were found.");
+                    }
+                } else {
+                    appendLog("ERROR: No kernel modules directory found for forced NVIDIA DKMS install.");
+                }
+            } else {
+                appendLog("ERROR: Could not determine NVIDIA DKMS version.");
+            }
         }
-        
-        process->waitForFinished(3000);
-        process->deleteLater();
-        
-        std::string arch = utils::exec("uname -m");
-        if (arch.empty()) arch = "x86_64";
-        
-        // Esperar hasta 60 segundos a que aparezcan los paquetes
-        std::string binpkg, headerspkg;
-        for (int i = 0; i < 60; ++i) {
-            binpkg = utils::exec("find " + voidPackagesDir + "/hostdir/binpkgs -name \"" + name + "-[0-9]*." + arch + ".xbps\" | head -n 1");
-            if (!binpkg.empty()) break;
-            QThread::msleep(1000);
-        }
-        
-        // Intentar encontrar headers (no bloqueante, puede no existir)
-        headerspkg = utils::exec("find " + voidPackagesDir + "/hostdir/binpkgs -name \"" + name + "-headers-[0-9]*." + arch + ".xbps\" | head -n 1");
-        
-        if (!binpkg.empty()) {
-            QMetaObject::invokeMethod(this, [this, binpkg, headerspkg]() {
-                appendLog("Success! Binary package generated: " + QString::fromStdString(binpkg));
-                appendLog("Headers package: " + QString::fromStdString(headerspkg));
-                setStatusMessage("Build finished. Package available in void-packages/hostdir/binpkgs.", false);
-            });
-        } else {
-            QMetaObject::invokeMethod(this, [this]() {
-                appendLog("ERROR: compilation finished but target .xbps package was not found. Inspect the log tracking above.");
-                setStatusMessage("Build failed: package not found.", true);
-            });
-        }
-        
-        QMetaObject::invokeMethod(this, [this]() { 
-            setBusy(false); 
-            setProgress(100);
+
+        QMetaObject::invokeMethod(this, [this, success, isPackage, name]() {
+            if (success) {
+                appendLog((isPackage ? "XBPS DKMS package installation finished: " : "DKMS module installation finished: ") + name);
+                setStatusMessage(isPackage ? "XBPS DKMS Package installed" : "DKMS module installed", false);
+            } else {
+                appendLog((isPackage ? "ERROR: XBPS DKMS package installation failed: " : "ERROR: DKMS module installation failed: ") + name);
+                setStatusMessage(isPackage ? "XBPS package installation failed" : "DKMS module installation failed", true);
+            }
+            setBusy(false);
+            updateDkmsModules();
         });
     });
+    (void)future;
 }
 
-void KernelBridge::saveConfig() {}
-void KernelBridge::loadConfig() {}
-void KernelBridge::setStatusMessage(const QString &m, bool e) { m_statusMessage = m; m_statusIsError = e; emit statusMessageChanged(); }
-void KernelBridge::setBusy(bool b) { m_busy = b; emit busyChanged(); }
-QString KernelBridge::activeKernelVersion() const { return QString::fromStdString(utils::exec("uname -r")); }
-QString KernelBridge::detectedCpuLevel() const { return QString::fromStdString(utils::detectCpuLevel()); }
-void KernelBridge::exportPackages(const QString &d) { Q_UNUSED(d); }
+void KernelBridge::removeDkmsModule(const QString &name, const QString &version, const QString &kernel) {
+    bool isPackage = name.endsWith("-dkms");
+    if (isPackage) {
+        appendLog("Starting removal of XBPS DKMS package: " + name);
+    } else {
+        appendLog("Starting removal of DKMS module: " + name + " v" + version + " for kernel " + kernel);
+    }
+    setBusy(true);
+
+    auto future = QtConcurrent::run([this, name, version, kernel, isPackage]() {
+        std::string cmd;
+        if (isPackage) {
+            cmd = "pkexec xbps-remove -Rfy " + name.toStdString();
+        } else {
+            if (!kernel.isEmpty()) {
+                cmd = "pkexec dkms remove -m " + name.toStdString() +
+                      " -v " + version.toStdString() +
+                      " -k " + kernel.toStdString();
+            } else {
+                cmd = "pkexec dkms remove -m " + name.toStdString() +
+                      " -v " + version.toStdString() + " --all";
+            }
+        }
+        appendLog("Executing: " + QString::fromStdString(cmd));
+        auto result = utils::execWithOutput(cmd);
+        if (!result.stdout.empty()) {
+            appendLog(QString::fromStdString(result.stdout));
+        }
+        if (!result.stderr.empty()) {
+            appendLog(QString::fromStdString(result.stderr));
+        }
+        bool success = (result.exitCode == 0);
+
+        QMetaObject::invokeMethod(this, [this, success, isPackage, name]() {
+            if (success) {
+                appendLog((isPackage ? "XBPS DKMS package removal finished: " : "DKMS module removal finished: ") + name);
+                setStatusMessage(isPackage ? "XBPS DKMS Package removed" : "DKMS module removed", false);
+            } else {
+                appendLog((isPackage ? "ERROR: XBPS DKMS package removal failed: " : "ERROR: DKMS module removal failed: ") + name);
+                setStatusMessage(isPackage ? "XBPS package removal failed" : "DKMS module removal failed", true);
+            }
+            setBusy(false);
+            updateDkmsModules();
+        });
+    });
+    (void)future;
+}
+
+void KernelBridge::autoinstallDkms() {
+    appendLog("Initiating DKMS autoinstall for active kernel: " + activeKernelVersion());
+    setBusy(true);
+
+    auto future = QtConcurrent::run([this]() {
+        std::string cmd = "pkexec dkms autoinstall";
+        appendLog("Executing dkms autoinstall: " + QString::fromStdString(cmd));
+        auto result = utils::execWithOutput(cmd);
+        if (!result.stdout.empty()) {
+            appendLog(QString::fromStdString(result.stdout));
+        }
+        if (!result.stderr.empty()) {
+            appendLog(QString::fromStdString(result.stderr));
+        }
+        bool success = (result.exitCode == 0);
+
+        QMetaObject::invokeMethod(this, [this, success]() {
+            if (success) {
+                appendLog("DKMS autoinstall completed successfully.");
+                setStatusMessage("DKMS autoinstall completed", false);
+            } else {
+                appendLog("ERROR: DKMS autoinstall failed.");
+                setStatusMessage("DKMS autoinstall failed", true);
+            }
+            setBusy(false);
+            updateDkmsModules();
+        });
+    });
+    (void)future;
+}
+
+// Default Kernel Selection Implementation (solo GRUB)
+QString KernelBridge::getDefaultKernelInternal() {
+    if (QFile::exists("/etc/default/grub")) {
+        std::string line = utils::exec("grep '^GRUB_DEFAULT=' /etc/default/grub");
+        if (!line.empty()) {
+            QString str = QString::fromStdString(line).trimmed();
+            int eqIdx = str.indexOf('=');
+            if (eqIdx != -1) {
+                QString val = str.mid(eqIdx + 1).trimmed();
+                val.remove('"');
+                val.remove('\'');
+                if (val == "saved") {
+                    std::string savedLine = utils::exec("grub-editenv list 2>/dev/null | grep '^saved_entry=' || grub2-editenv list 2>/dev/null | grep '^saved_entry='");
+                    if (!savedLine.empty()) {
+                        QString savedStr = QString::fromStdString(savedLine).trimmed();
+                        int savedEqIdx = savedStr.indexOf('=');
+                        if (savedEqIdx != -1) {
+                            QString savedVal = savedStr.mid(savedEqIdx + 1).trimmed();
+                            savedVal.remove('"');
+                            savedVal.remove('\'');
+                            if (!savedVal.isEmpty()) {
+                                QList<QString> markers = {"with Linux ", "con Linux "};
+                                for (const QString &marker : markers) {
+                                    int idx = savedVal.indexOf(marker, 0, Qt::CaseInsensitive);
+                                    if (idx != -1) {
+                                        return savedVal.mid(idx + marker.size()).trimmed();
+                                    }
+                                }
+                                return savedVal;
+                            }
+                        }
+                    }
+                } else {
+                    QList<QString> markers = {"with Linux ", "con Linux "};
+                    for (const QString &marker : markers) {
+                        if (val.contains(marker, Qt::CaseInsensitive)) {
+                            int withLinuxIdx = val.indexOf(marker, 0, Qt::CaseInsensitive);
+                            return val.mid(withLinuxIdx + marker.size()).trimmed();
+                        }
+                    }
+                    if (val != "0" && !val.isEmpty()) {
+                        return val;
+                    }
+                }
+            }
+        }
+    }
+    return activeKernelVersion();
+}
+
+void KernelBridge::updateDefaultKernel() {
+    auto future = QtConcurrent::run([this]() {
+        QString def = getDefaultKernelInternal();
+        QMetaObject::invokeMethod(this, [this, def]() {
+            m_defaultKernel = def;
+            emit defaultKernelChanged();
+            appendLog("Current default boot kernel is set to: " + def);
+        });
+    });
+    (void)future;
+}
+
+void KernelBridge::setDefaultKernel(const QString &kernelVersion) {
+    // Usar invokeMethod para asegurar que appendLog y setBusy se llaman en el hilo principal
+    QMetaObject::invokeMethod(this, [this, kernelVersion]() {
+        appendLog("Requesting default boot kernel change to: " + kernelVersion);
+        setBusy(true);
+    }, Qt::QueuedConnection);
+
+    auto future = QtConcurrent::run([this, kernelVersion]() {
+        // Void Linux usa GRUB, así que asumimos GRUB siempre
+        std::string cmd;  // <--- DECLARACIÓN AÑADIDA
+        std::string distributor = "Void Linux";
+
+        if (QFile::exists("/etc/default/grub")) {
+            std::string distLine = utils::exec("grep '^GRUB_DISTRIBUTOR=' /etc/default/grub");
+            if (!distLine.empty()) {
+                QString distVal = QString::fromStdString(distLine).trimmed();
+                int eqIdx = distVal.indexOf('=');
+                if (eqIdx != -1) {
+                    QString raw = distVal.mid(eqIdx + 1).trimmed();
+                    raw.remove('"');
+                    raw.remove('\'');
+                    if (!raw.isEmpty())
+                        distributor = raw.toStdString();
+                }
+            }
+        }
+
+        if (distributor == "Void" || distributor == "Linux") {
+            std::string osName = utils::exec("grep '^NAME=' /etc/os-release");
+            if (!osName.empty()) {
+                QString nameVal = QString::fromStdString(osName).trimmed();
+                int eqIdx = nameVal.indexOf('=');
+                if (eqIdx != -1) {
+                    QString raw = nameVal.mid(eqIdx + 1).trimmed();
+                    raw.remove('"');
+                    raw.remove('\'');
+                    if (!raw.isEmpty())
+                        distributor = raw.toStdString();
+                }
+            }
+        }
+
+        QString grubEntry = QString::fromStdString(distributor) + ", with Linux " + kernelVersion;
+        std::string entry = grubEntry.toStdString();
+
+        // Función para escapar comillas simples de forma segura en scripts sh
+        auto shellEscapeSingleQuotes = [](const std::string &value) -> std::string {
+            std::string escaped = "'";
+            for (char c : value) {
+                if (c == '\'') escaped += "'\\''";
+                else escaped += c;
+            }
+            escaped += "'";
+            return escaped;
+        };
+
+        std::string grubEditenvBin;
+        if (utils::commandExists("grub-editenv")) {
+            grubEditenvBin = "grub-editenv";
+        } else if (utils::commandExists("grub2-editenv")) {
+            grubEditenvBin = "grub2-editenv";
+        }
+
+        std::string grubEnvPath = "/boot/grub/grubenv";
+        if (!QFile::exists(QString::fromStdString(grubEnvPath))) {
+            grubEnvPath = "/boot/grub2/grubenv";
+        }
+
+        std::string grubCfgPath = "/boot/grub/grub.cfg";
+        bool grubCfgExists = QFile::exists(QString::fromStdString(grubCfgPath));
+        if (!grubCfgExists) {
+            grubCfgPath = "/boot/grub2/grub.cfg";
+            grubCfgExists = QFile::exists(QString::fromStdString(grubCfgPath));
+        }
+
+        QString actualEntry;
+        bool foundEntry = false;
+
+        if (grubCfgExists) {
+            auto parseGrubCfg = [&](const QStringList &lines) -> bool {
+                int braceCount = 0;
+                QString currentSubmenu;
+                int submenuBraceLevel = -1;
+
+                auto extractTitle = [](const QString &l) -> QString {
+                    int firstQuote = -1;
+                    QChar quoteChar;
+                    for (int i = 0; i < l.size(); ++i) {
+                        if (l[i] == '\'' || l[i] == '"') {
+                            firstQuote = i;
+                            quoteChar = l[i];
+                            break;
+                        }
+                    }
+                    if (firstQuote != -1) {
+                        int secondQuote = l.indexOf(quoteChar, firstQuote + 1);
+                        if (secondQuote != -1) {
+                            return l.mid(firstQuote + 1, secondQuote - firstQuote - 1).trimmed();
+                        }
+                    }
+                    return "";
+                };
+
+                for (const QString &rawLine : lines) {
+                    QString line = rawLine.trimmed();
+
+                    if (line.contains("submenu ", Qt::CaseInsensitive)) {
+                        QString subTitle = extractTitle(line);
+                        if (!subTitle.isEmpty()) {
+                            currentSubmenu = subTitle;
+                            submenuBraceLevel = braceCount;
+                        }
+                    }
+
+                    if (line.contains("menuentry ", Qt::CaseInsensitive)
+                        && line.contains(kernelVersion, Qt::CaseInsensitive)
+                        && !line.contains("recovery", Qt::CaseInsensitive)) {
+                        QString entryTitle = extractTitle(line);
+                        if (!entryTitle.isEmpty()) {
+                            if (!currentSubmenu.isEmpty()) {
+                                actualEntry = currentSubmenu + ">" + entryTitle;
+                            } else {
+                                actualEntry = entryTitle;
+                            }
+                            foundEntry = true;
+                            return true;
+                        }
+                    }
+
+                    for (int i = 0; i < line.size(); ++i) {
+                        if (line[i] == '{') {
+                            braceCount++;
+                        } else if (line[i] == '}') {
+                            braceCount--;
+                            if (submenuBraceLevel != -1 && braceCount <= submenuBraceLevel) {
+                                currentSubmenu = "";
+                                submenuBraceLevel = -1;
+                            }
+                        }
+                    }
+                }
+                return false;
+            };
+
+            QStringList lines;
+            QFile cfg(QString::fromStdString(grubCfgPath));
+            bool cfgReadable = cfg.open(QIODevice::ReadOnly | QIODevice::Text);
+
+            if (cfgReadable) {
+                QTextStream in(&cfg);
+                while (!in.atEnd()) {
+                    lines.append(in.readLine());
+                }
+                cfg.close();
+                if (!lines.isEmpty()) {
+                    foundEntry = parseGrubCfg(lines);
+                }
+            }
+
+            // Solo intentar con pkexec si no se pudo leer el archivo por permisos
+            if (!cfgReadable && !foundEntry) {
+                std::string catCmd = "pkexec cat '" + grubCfgPath + "' 2>/dev/null";
+                std::string catOutput = utils::exec(catCmd);
+                if (!catOutput.empty()) {
+                    lines = QString::fromStdString(catOutput).split('\n');
+                    foundEntry = parseGrubCfg(lines);
+                }
+            }
+        }
+
+        if (!foundEntry) {
+            actualEntry = QString::fromStdString(entry);
+        }
+
+        std::string escapedActualEntry = shellEscapeSingleQuotes(actualEntry.toStdString());
+
+        // Construir la cadena de comandos
+        std::string commandChain = "export PATH=$PATH:/usr/sbin:/sbin; set -e; ";
+        commandChain += "if grep -Eq '^#?[[:space:]]*GRUB_DEFAULT=' /etc/default/grub; then ";
+        commandChain += "sed -i -E 's/^#?[[:space:]]*GRUB_DEFAULT=.*/GRUB_DEFAULT=saved/' /etc/default/grub; ";
+        commandChain += "else ";
+        commandChain += "echo 'GRUB_DEFAULT=saved' >> /etc/default/grub; ";
+        commandChain += "fi; ";
+
+        if (!grubEditenvBin.empty() && !grubEnvPath.empty()) {
+            if (!QFile::exists(QString::fromStdString(grubEnvPath))) {
+                commandChain += grubEditenvBin + " " + grubEnvPath + " create; ";
+            }
+            commandChain += grubEditenvBin + " " + grubEnvPath + " set saved_entry=" + escapedActualEntry + "; ";
+        } else if (utils::commandExists("grub-set-default")) {
+            commandChain += "grub-set-default " + escapedActualEntry + "; ";
+        } else if (utils::commandExists("grub2-set-default")) {
+            commandChain += "grub2-set-default " + escapedActualEntry + "; ";
+        } else {
+            commandChain += "echo 'No GRUB command available' >&2; false; ";
+        }
+
+        if (grubCfgExists) {
+            commandChain += "if command -v update-grub >/dev/null 2>&1; then update-grub; ";
+            commandChain += "elif command -v grub-mkconfig >/dev/null 2>&1; then grub-mkconfig -o " + grubCfgPath + "; ";
+            commandChain += "elif command -v grub2-mkconfig >/dev/null 2>&1; then grub2-mkconfig -o " + grubCfgPath + "; ";
+            commandChain += "else echo 'No grub-mkconfig or update-grub command found' >&2; false; fi ";
+        }
+
+        // Escribir en un archivo temporal para evitar problemas de escapado con pkexec sh -c
+        std::string tempScriptPath;
+        {
+            char templatePath[] = "/tmp/com.neko.kernelmanager.XXXXXX";
+            int fd = mkstemp(templatePath);
+            if (fd != -1) {
+                tempScriptPath = templatePath;
+                std::string content = commandChain;
+                ssize_t written = write(fd, content.c_str(), content.size());
+                (void)written;
+                (void)fchmod(fd, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+                close(fd);
+            }
+        }
+
+        if (!tempScriptPath.empty()) {
+            cmd = "pkexec sh " + shellEscapeSingleQuotes(tempScriptPath);
+        } else {
+            // Si falla la creación del temporal, usamos un fallback con doble escapado
+            auto shellEscapeDouble = [](const std::string &value) {
+                std::string escaped = "\"";
+                for (char c : value) {
+                    if (c == '"' || c == '\\' || c == '$' || c == '`')
+                        escaped += "\\";
+                    escaped += c;
+                }
+                escaped += "\"";
+                return escaped;
+            };
+
+            std::string doubleEscaped = shellEscapeDouble(actualEntry.toStdString());
+            size_t pos = commandChain.find(escapedActualEntry);
+            while (pos != std::string::npos) {
+                commandChain.replace(pos, escapedActualEntry.length(), doubleEscaped);
+                pos = commandChain.find(escapedActualEntry, pos + doubleEscaped.length());
+            }
+
+            cmd = "pkexec sh -c " + shellEscapeDouble(commandChain);
+        }
+
+        if (!tempScriptPath.empty()) {
+            cmd += "; rm -f " + shellEscapeSingleQuotes(tempScriptPath);
+        }
+
+        appendLog("Executing GRUB update: " + QString::fromStdString(cmd));
+        auto result = utils::execWithOutput(cmd);
+        if (!result.stdout.empty()) {
+            appendLog(QString::fromStdString(result.stdout));
+        }
+        if (!result.stderr.empty()) {
+            appendLog(QString::fromStdString(result.stderr));
+        }
+        bool success = (result.exitCode == 0);
+
+        QMetaObject::invokeMethod(this, [this, success, kernelVersion]() {
+            if (success) {
+                appendLog("Default boot kernel changed to " + kernelVersion + " successfully.");
+                setStatusMessage("Default kernel updated", false);
+                m_defaultKernel = kernelVersion;
+                emit defaultKernelChanged();
+            } else {
+                appendLog("ERROR: Failed to change default kernel to " + kernelVersion);
+                setStatusMessage("Failed to update default kernel", true);
+            }
+            updateDefaultKernel();
+            updateKernels();
+            setBusy(false);
+        });
+    });
+    (void)future;
+}
