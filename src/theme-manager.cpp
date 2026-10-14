@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QFile>
 #include <QRegularExpression>
+#include <QDebug>  // Añadido para mensajes de depuración
 
 // Resolve a raw @define-color value string to a QColor.
 //   #rgb / #rrggbb / named  -> QColor directly
@@ -94,9 +95,15 @@ void ThemeManager::load() {
     QString foundIn;
 
     for (const QString &path : m_files) {
-        QFile f(path);
-        if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
+        if (!QFile::exists(path)) {
             continue;
+        }
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            // Mensaje de depuración (no crítico)
+            qDebug() << "ThemeManager: Could not open" << path;
+            continue;
+        }
         const QString text = QString::fromUtf8(f.readAll());
         auto it = re.globalMatch(text);
         bool any = false;

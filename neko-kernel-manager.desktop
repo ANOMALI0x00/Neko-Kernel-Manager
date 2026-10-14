@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Neko Kernel Manager
-Comment=Kernel manager with easy optimization and simplified workflow
+Comment=User-friendly kernel manager for Neko Void
 Exec=neko-kernel-manager
 Icon=neko-kernel-manager
 Terminal=false

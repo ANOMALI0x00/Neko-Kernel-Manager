@@ -1,5 +1,5 @@
 project('neko-kernel-manager', 'cpp',
-        version: '1.3.0',
+        version: '1.4.0',
         license: 'GPL-3.0-only',
         meson_version: '>=0.59.0',
         default_options: ['cpp_std=c++20',

@@ -30,7 +30,12 @@ public:
 
     Q_INVOKABLE void updateKernels();
     Q_INVOKABLE void installKernel(const QString &name);
-    Q_INVOKABLE void removeKernel(const QString &name);
+
+    // removeKernel: type y version son opcionales. Si no se pasan, la función los deduce.
+    // - Si type == "manual", se asume kernel manual (basado en /boot).
+    // - Si version está vacía, se intenta extraer del nombre.
+    Q_INVOKABLE void removeKernel(const QString &name, const QString &type = "", const QString &version = "");
+
     Q_INVOKABLE void vkpurge();
 
     // DKMS Management
@@ -43,11 +48,18 @@ public:
     Q_INVOKABLE void updateDefaultKernel();
     Q_INVOKABLE void setDefaultKernel(const QString &kernelVersion);
 
+    // Log Management
+    Q_INVOKABLE void clearLogs() { m_logs = ""; emit logsChanged(); }
+    Q_INVOKABLE void exportLogs(const QString &filePath);   // Guarda los logs en un archivo
+
+    // Verbose mode (para depuración)
+    void setVerbose(bool v) { m_verbose = v; }
+    bool verbose() const { return m_verbose; }
+
     bool busy() const { return m_busy; }
     int progress() const { return m_progress; }
 
     QString logs() const { return m_logs; }
-    Q_INVOKABLE void clearLogs() { m_logs = ""; emit logsChanged(); }
     void appendLog(const QString &line);
 
     QString statusMessage() const { return m_statusMessage; }
@@ -69,6 +81,7 @@ signals:
 
 private:
     bool m_busy = false;
+    int m_busyCount = 0;
     int m_progress = 0;
     QString m_logs;
     QVariantList m_kernelsCache;
@@ -83,6 +96,11 @@ private:
 
     QString m_statusMessage;
     bool m_statusIsError = false;
+
+    // Modo verbose para depuración avanzada
+    bool m_verbose = false;
+
+    Q_DISABLE_COPY_MOVE(KernelBridge)
 };
 
 #endif // KERNEL_BRIDGE_HPP

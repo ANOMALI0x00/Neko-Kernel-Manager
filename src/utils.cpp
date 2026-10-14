@@ -1,9 +1,6 @@
 #include "utils.hpp"
 
 #include <QProcess>
-#include <array>
-#include <memory>
-#include <cstdio>
 #include <sstream>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -12,18 +9,31 @@
 namespace utils {
 
 std::string exec(const std::string &cmd) {
-    std::array<char, 128> buffer;
-    std::string result;
-    FILE* raw_pipe = popen(cmd.c_str(), "r");
-    if (!raw_pipe) return "";
-    auto closer = [](FILE *pipe) {
-        if (pipe) pclose(pipe);
-    };
-    std::unique_ptr<FILE, decltype(closer)> pipe(raw_pipe, closer);
-    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-        result += buffer.data();
-    }
-    if (!result.empty() && result.back() == '\n') result.pop_back();
+    QProcess process;
+    process.setProgram("sh");
+    process.setArguments({"-c", QString::fromStdString(cmd)});
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start();
+    process.waitForFinished(-1);
+
+    QString output = process.readAllStandardOutput();
+    if (!output.isEmpty() && output.back() == '\n')
+        output.chop(1);
+    return output.toStdString();
+}
+
+utils::CommandOutput execWithOutput(const std::string &cmd) {
+    QProcess process;
+    process.setProgram("sh");
+    process.setArguments({"-c", QString::fromStdString(cmd)});
+    process.setProcessChannelMode(QProcess::SeparateChannels);
+    process.start();
+    process.waitForFinished(-1);
+
+    utils::CommandOutput result;
+    result.stdout = process.readAllStandardOutput().toStdString();
+    result.stderr = process.readAllStandardError().toStdString();
+    result.exitCode = process.exitCode();
     return result;
 }
 
@@ -31,48 +41,89 @@ bool runCommand(const std::string& cmd) {
     return system(cmd.c_str()) == 0;
 }
 
+static bool canAuthenticate(const std::string &privilegeCmd) {
+    std::string testCmd = privilegeCmd + " true 2>/dev/null";
+    int ret = system(testCmd.c_str());
+    return (ret == 0);
+}
+
+static std::string detectPrivilegeSystem() {
+    if (system("command -v pkexec >/dev/null 2>&1") == 0) {
+        if (canAuthenticate("pkexec")) {
+            return "pkexec";
+        }
+    }
+    if (system("command -v doas >/dev/null 2>&1") == 0) {
+        if (canAuthenticate("doas")) {
+            return "doas";
+        }
+    }
+    if (system("command -v sudo >/dev/null 2>&1") == 0) {
+        if (canAuthenticate("sudo")) {
+            return "sudo";
+        }
+        return "sudo";
+    }
+    return "";
+}
+
 bool runPrivilegedCommand(const std::string& cmd) {
     if (getuid() == 0) {
         return system(cmd.c_str()) == 0;
     }
-
-    // If the command already includes pkexec or sudo, run it as-is to avoid double-wrapping
-    if (cmd.find("pkexec") != std::string::npos || cmd.find("sudo") != std::string::npos) {
+    if (cmd.find("pkexec") != std::string::npos ||
+        cmd.find("doas") != std::string::npos ||
+        cmd.find("sudo") != std::string::npos) {
         return system(cmd.c_str()) == 0;
     }
-
-    // Prefer pkexec when available
-    if (system("command -v pkexec >/dev/null 2>&1") == 0) {
+    std::string privilege = detectPrivilegeSystem();
+    if (privilege == "pkexec") {
         std::string pkcmd = "pkexec sh -c \"" + cmd + "\"";
         return system(pkcmd.c_str()) == 0;
+    } else if (privilege == "doas") {
+        std::string doascmd = "doas sh -c \"" + cmd + "\"";
+        return system(doascmd.c_str()) == 0;
+    } else if (privilege == "sudo") {
+        std::string sudocmd;
+        if (getenv("SUDO_ASKPASS") != nullptr) {
+            sudocmd = "sudo -A sh -c \"" + cmd + "\"";
+        } else {
+            sudocmd = "sudo sh -c \"" + cmd + "\"";
+        }
+        return system(sudocmd.c_str()) == 0;
     }
-
-    // Fallback to sudo if pkexec is not available (will fail in GUI without terminal, but it's a last resort)
-    std::string sudocmd = "sudo sh -c \"" + cmd + "\"";
-    return system(sudocmd.c_str()) == 0;
+    return false;
 }
 
 void runInTerminal(const std::string& cmd) {
-    // Try to find a terminal emulator
     const char* term = getenv("TERMINAL");
     std::string terminal;
     if (term) {
         terminal = term;
     } else {
-        // Fallback list
         for (const char* t : {"kitty", "alacritty", "foot", "xfce4-terminal", "konsole", "xterm"}) {
-            if (system((std::string("which ") + t + " >/dev/null 2>&1").c_str()) == 0) {
+            if (system((std::string("command -v ") + t + " >/dev/null 2>&1").c_str()) == 0) {
                 terminal = t;
                 break;
             }
         }
     }
-
+    std::string finalCmd = cmd;
+    if (cmd.find("doas") == std::string::npos &&
+        cmd.find("sudo") == std::string::npos &&
+        cmd.find("pkexec") == std::string::npos) {
+        std::string privilege = detectPrivilegeSystem();
+        if (!privilege.empty()) {
+            finalCmd = privilege + " sh -c \"" + cmd + "\"";
+        }
+    }
     if (!terminal.empty()) {
-        std::string finalCmd = terminal + " -e sh -c \"" + cmd + "; echo 'Press enter to close...'; read\"";
-        system(finalCmd.c_str());
+        std::string termCmd = terminal + " -e sh -c \"" + finalCmd + "; echo 'Press enter to close...'; read\"";
+        int res = system(termCmd.c_str());
+        (void)res;
     } else {
-        system(cmd.c_str());
+        int res = system(finalCmd.c_str());
+        (void)res;
     }
 }
 
@@ -111,6 +162,11 @@ bool commandExists(const std::string &cmd) {
     return QProcess::execute("sh", {"-c", "command -v '" + escaped + "' >/dev/null 2>&1"}) == 0;
 }
 
+bool fileExists(const std::string &path) {
+    struct ::stat info;
+    return (::stat(path.c_str(), &info) == 0) && (info.st_mode & S_IFREG);
+}
+
 bool dirExists(const std::string &path) {
     struct ::stat info;
     if (::stat(path.c_str(), &info) != 0) return false;
@@ -119,12 +175,20 @@ bool dirExists(const std::string &path) {
 
 bool packageExists(const std::string &pkgName) {
     if (!commandExists("xbps-query")) return false;
-    return QProcess::execute("xbps-query", {"-S", QString::fromStdString(pkgName)}) == 0;
+    return QProcess::execute("xbps-query", {"-Rs", QString::fromStdString(pkgName)}) == 0;
 }
 
 bool packageInstalled(const std::string &pkgName) {
     if (!commandExists("xbps-query")) return false;
-    return QProcess::execute("xbps-query", {"-W", QString::fromStdString(pkgName)}) == 0;
+    QProcess process;
+    process.setProgram("xbps-query");
+    process.setArguments({"-l"});
+    process.setProcessChannelMode(QProcess::MergedChannels);
+    process.start();
+    process.waitForFinished(-1);
+    if (process.exitCode() != 0) return false;
+    QString output = process.readAllStandardOutput();
+    return output.contains(QString::fromStdString(pkgName));
 }
 
 std::string getRealHome() {
@@ -133,16 +197,12 @@ std::string getRealHome() {
         struct passwd* pw = getpwnam(sudo_user);
         if (pw) return pw->pw_dir;
     }
-    
-    // If we are root but no SUDO_USER, try to find the user who owns /home/*
     if (getuid() == 0) {
         struct passwd* pw = getpwuid(1000);
         if (pw) return pw->pw_dir;
     }
-
     const char* home = getenv("HOME");
     if (home) return home;
-    
     struct passwd* pw = getpwuid(getuid());
     return pw ? pw->pw_dir : "/tmp";
 }
@@ -150,52 +210,36 @@ std::string getRealHome() {
 std::string getRealUser() {
     const char* sudo_user = getenv("SUDO_USER");
     if (sudo_user && std::string(sudo_user) != "root") return sudo_user;
-    
     if (getuid() == 0) {
         struct passwd* pw = getpwuid(1000);
         if (pw) return pw->pw_name;
     }
-
     struct passwd* pw = getpwuid(getuid());
     return pw ? pw->pw_name : "unknown";
 }
 
 std::string detectCpuLevel() {
-    // Check CPU features using /proc/cpuinfo or by executing a check script
-    // A simple way is to use a helper that checks flags
-    // v1: basic x86-64
-    // v2: +popcnt, +sse4_1, +sse4_2, +ssse3
-    // v3: +avx, +avx2, +bmi1, +bmi2, +f16c, +fma, +movbe, +xsave
-    // v4: +avx512f, +avx512bw, +avx512cd, +avx512dq, +avx512vl
-    
     std::string flags = exec("grep -m1 flags /proc/cpuinfo");
-    
-    bool has_v2 = flags.find("popcnt") != std::string::npos && 
-                  flags.find("sse4_1") != std::string::npos && 
-                  flags.find("sse4_2") != std::string::npos && 
+    bool has_v2 = flags.find("popcnt") != std::string::npos &&
+                  flags.find("sse4_1") != std::string::npos &&
+                  flags.find("sse4_2") != std::string::npos &&
                   flags.find("ssse3") != std::string::npos;
-                  
-    if (!has_v2) return "x86-64"; // v1
-    
-    bool has_v3 = flags.find("avx") != std::string::npos && 
-                  flags.find("avx2") != std::string::npos && 
-                  flags.find("bmi1") != std::string::npos && 
-                  flags.find("bmi2") != std::string::npos && 
-                  flags.find("f16c") != std::string::npos && 
-                  flags.find("fma") != std::string::npos && 
-                  flags.find("movbe") != std::string::npos && 
+    if (!has_v2) return "x86-64";
+    bool has_v3 = flags.find("avx") != std::string::npos &&
+                  flags.find("avx2") != std::string::npos &&
+                  flags.find("bmi1") != std::string::npos &&
+                  flags.find("bmi2") != std::string::npos &&
+                  flags.find("f16c") != std::string::npos &&
+                  flags.find("fma") != std::string::npos &&
+                  flags.find("movbe") != std::string::npos &&
                   flags.find("xsave") != std::string::npos;
-                  
     if (!has_v3) return "x86-64-v2";
-    
-    bool has_v4 = flags.find("avx512f") != std::string::npos && 
-                  flags.find("avx512bw") != std::string::npos && 
-                  flags.find("avx512cd") != std::string::npos && 
-                  flags.find("avx512dq") != std::string::npos && 
+    bool has_v4 = flags.find("avx512f") != std::string::npos &&
+                  flags.find("avx512bw") != std::string::npos &&
+                  flags.find("avx512cd") != std::string::npos &&
+                  flags.find("avx512dq") != std::string::npos &&
                   flags.find("avx512vl") != std::string::npos;
-                  
     if (!has_v4) return "x86-64-v3";
-    
     return "x86-64-v4";
 }
 
