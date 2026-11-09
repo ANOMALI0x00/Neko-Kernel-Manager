@@ -37,114 +37,12 @@ utils::CommandOutput execWithOutput(const std::string &cmd) {
     return result;
 }
 
-bool runCommand(const std::string& cmd) {
-    return system(cmd.c_str()) == 0;
-}
-
-static std::string detectPrivilegeSystem() {
-    if (system("command -v pkexec >/dev/null 2>&1") == 0) {
-        return "pkexec";
-    }
-    if (system("command -v doas >/dev/null 2>&1") == 0) {
-        return "doas";
-    }
-    if (system("command -v sudo >/dev/null 2>&1") == 0) {
-        return "sudo";
-    }
-    return "";
-}
-
-bool runPrivilegedCommand(const std::string& cmd) {
-    if (getuid() == 0) {
-        return system(cmd.c_str()) == 0;
-    }
-    if (cmd.find("pkexec") != std::string::npos ||
-        cmd.find("doas") != std::string::npos ||
-        cmd.find("sudo") != std::string::npos) {
-        return system(cmd.c_str()) == 0;
-    }
-    std::string privilege = detectPrivilegeSystem();
-    if (privilege == "pkexec") {
-        std::string pkcmd = "pkexec sh -c \"" + cmd + "\"";
-        return system(pkcmd.c_str()) == 0;
-    } else if (privilege == "doas") {
-        std::string doascmd = "doas sh -c \"" + cmd + "\"";
-        return system(doascmd.c_str()) == 0;
-    } else if (privilege == "sudo") {
-        std::string sudocmd;
-        if (getenv("SUDO_ASKPASS") != nullptr) {
-            sudocmd = "sudo -A sh -c \"" + cmd + "\"";
-        } else {
-            sudocmd = "sudo sh -c \"" + cmd + "\"";
-        }
-        return system(sudocmd.c_str()) == 0;
-    }
-    return false;
-}
-
-void runInTerminal(const std::string& cmd) {
-    const char* term = getenv("TERMINAL");
-    std::string terminal;
-    if (term) {
-        terminal = term;
-    } else {
-        for (const char* t : {"kitty", "alacritty", "foot", "xfce4-terminal", "konsole", "xterm"}) {
-            if (system((std::string("command -v ") + t + " >/dev/null 2>&1").c_str()) == 0) {
-                terminal = t;
-                break;
-            }
-        }
-    }
-    std::string finalCmd = cmd;
-    if (cmd.find("doas") == std::string::npos &&
-        cmd.find("sudo") == std::string::npos &&
-        cmd.find("pkexec") == std::string::npos) {
-        std::string privilege = detectPrivilegeSystem();
-        if (!privilege.empty()) {
-            finalCmd = privilege + " sh -c \"" + cmd + "\"";
-        }
-    }
-    if (!terminal.empty()) {
-        std::string termCmd = terminal + " -e sh -c \"" + finalCmd + "; echo 'Press enter to close...'; read\"";
-        int res = system(termCmd.c_str());
-        (void)res;
-    } else {
-        int res = system(finalCmd.c_str());
-        (void)res;
-    }
-}
-
-bool fileOwnedByPackage(const std::string &filePath) {
-    if (!commandExists("xbps-query")) return false;
-    QProcess process;
-    process.setProgram("xbps-query");
-    process.setArguments({"-o", QString::fromStdString(filePath)});
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start();
-    process.waitForFinished(-1);
-    if (process.exitCode() != 0) return false;
-    QString out = process.readAllStandardOutput().trimmed();
-    if (out.isEmpty() || out.contains("not owned") || out.contains("No such file")) {
-        return false;
-    }
-    return true;
-}
-
 std::vector<std::string> split(const std::string &s, char delim) {
     std::vector<std::string> result;
     std::stringstream ss(s);
     std::string item;
     while (std::getline(ss, item, delim)) {
         result.push_back(item);
-    }
-    return result;
-}
-
-std::string join(const std::vector<std::string> &v, const std::string &delim) {
-    std::string result;
-    for (size_t i = 0; i < v.size(); ++i) {
-        if (i > 0) result += delim;
-        result += v[i];
     }
     return result;
 }
@@ -179,11 +77,6 @@ bool dirExists(const std::string &path) {
     return (info.st_mode & S_IFDIR);
 }
 
-bool packageExists(const std::string &pkgName) {
-    if (!commandExists("xbps-query")) return false;
-    return QProcess::execute("xbps-query", {"-R", "-p", "pkgver", QString::fromStdString(pkgName)}) == 0;
-}
-
 bool packageInstalled(const std::string &pkgName) {
     if (!commandExists("xbps-query")) return false;
     return QProcess::execute("xbps-query", {"-p", "pkgver", QString::fromStdString(pkgName)}) == 0;
@@ -203,17 +96,6 @@ std::string getRealHome() {
     if (home) return home;
     struct passwd* pw = getpwuid(getuid());
     return pw ? pw->pw_dir : "/tmp";
-}
-
-std::string getRealUser() {
-    const char* sudo_user = getenv("SUDO_USER");
-    if (sudo_user && std::string(sudo_user) != "root") return sudo_user;
-    if (getuid() == 0) {
-        struct passwd* pw = getpwuid(1000);
-        if (pw) return pw->pw_name;
-    }
-    struct passwd* pw = getpwuid(getuid());
-    return pw ? pw->pw_name : "unknown";
 }
 
 std::string detectCpuLevel() {

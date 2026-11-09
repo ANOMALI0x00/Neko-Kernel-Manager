@@ -8,6 +8,8 @@
 #include <QFile>
 #include <QTimer>
 #include <QTextStream>
+#include <QPointer>
+#include <QRegularExpression>
 #include <filesystem>
 #include <sstream>
 #include <sys/stat.h>
@@ -20,12 +22,26 @@ static bool hasPrivilegedHelper() {
     return QFile::exists(HELPER_PATH);
 }
 
+static bool isValidPkgName(const QString &pkg) {
+    static const QRegularExpression rx("^[a-zA-Z0-9_#+.-]+$");
+    return !pkg.isEmpty() && !pkg.startsWith('-') && rx.match(pkg).hasMatch();
+}
+
+static bool isValidVersion(const QString &ver) {
+    static const QRegularExpression rx("^[a-zA-Z0-9_.-]+$");
+    return !ver.isEmpty() && !ver.startsWith('-') && !ver.contains("..") && !ver.contains('/') && rx.match(ver).hasMatch();
+}
+
 KernelBridge::KernelBridge(QObject *parent) : QObject(parent), m_verbose(false) {
 }
 
 KernelBridge::~KernelBridge() {
-    int res = system("rm -rf /tmp/neko-kernel-* /tmp/com.neko.kernelmanager.*");
-    (void)res;
+    QDir tmpDir(QDir::tempPath());
+    const QStringList filters = {"neko-kernel-*", "com.neko.kernelmanager.*"};
+    const QStringList files = tmpDir.entryList(filters, QDir::Files);
+    for (const QString &f : files) {
+        tmpDir.remove(f);
+    }
 }
 
 void KernelBridge::setBusy(bool b) {
@@ -106,34 +122,35 @@ void KernelBridge::updateKernels() {
         }
     }
 
-    auto future = QtConcurrent::run([this]() {
-        QMetaObject::invokeMethod(this, [this]() { setProgress(40); });
+    QPointer<KernelBridge> self(this);
+    auto future = QtConcurrent::run([self]() {
+        if (!self) return;
+        QMetaObject::invokeMethod(self, [self]() {
+            if (self) self->setProgress(40);
+        });
 
-        auto newList = getKernels();
+        auto newList = self->getKernels();
 
-        QMetaObject::invokeMethod(this, [this, newList]() {
-            m_kernelsCache = newList;
-            setProgress(75);
-            emit kernelsChanged();
-            appendLog(QString("Kernel scan completed. Found %1 kernel entries:").arg(newList.size()));
+        QMetaObject::invokeMethod(self, [self, newList]() {
+            if (!self) return;
+            self->m_kernelsCache = newList;
+            self->setProgress(100);
+            self->setStatusMessage("Kernels loaded successfully", false);
+            self->setBusy(false);
+            emit self->kernelsChanged();
+            self->appendLog(QString("Kernel scan completed. Found %1 kernel entries:").arg(newList.size()));
             for (const auto &var : newList) {
                 QVariantMap m = var.toMap();
-                appendLog(QString("  • %1 (%2) [Type: %3, Repo: %4, Installed: %5]")
+                self->appendLog(QString("  • %1 (%2) [Type: %3, Repo: %4, Installed: %5]")
                             .arg(m["name"].toString())
                             .arg(m["version"].toString())
                             .arg(m["type"].toString())
                             .arg(m["repo"].toString())
                             .arg(m["installed"].toBool() ? "Yes" : "No"));
             }
-        });
-
-        QMetaObject::invokeMethod(this, [this, newList]() {
-            m_kernelsCache = newList;
-            setProgress(100);
-            setStatusMessage("Kernels loaded successfully", false);
-            setBusy(false);
-            emit kernelsChanged();
-            QTimer::singleShot(1000, this, [this]() { setProgress(0); });
+            QTimer::singleShot(1000, self, [self]() {
+                if (self) self->setProgress(0);
+            });
         });
     });
     (void)future;
@@ -209,11 +226,19 @@ void KernelBridge::exportLogs(const QString &filePath) {
 }
 
 void KernelBridge::installKernel(const QString &name) {
+    if (!isValidPkgName(name)) {
+        appendLog("SECURITY ERROR: Invalid kernel package name: " + name);
+        setStatusMessage("Invalid package name", true);
+        return;
+    }
+
     appendLog("Starting installation of kernel package: " + name);
     setBusy(true);
     setProgress(10);
 
-    auto future = QtConcurrent::run([this, name]() {
+    QPointer<KernelBridge> self(this);
+    auto future = QtConcurrent::run([self, name]() {
+        if (!self) return;
         std::string pkgName = name.toStdString();
         std::string headersPkg = pkgName + "-headers";
         std::string cmd;
@@ -223,41 +248,55 @@ void KernelBridge::installKernel(const QString &name) {
         } else {
             cmd = "pkexec sh -c \"xbps-install -y " + pkgName + " && (xbps-install -y " + headersPkg + " || true)\"";
         }
-        appendLog("Executing: " + QString::fromStdString(cmd));
+        self->appendLog("Executing: " + QString::fromStdString(cmd));
 
         auto result = utils::execWithOutput(cmd);
-        if (!result.stdout.empty()) {
-            appendLog(QString::fromStdString(result.stdout));
+        if (!result.stdout.empty() && self) {
+            self->appendLog(QString::fromStdString(result.stdout));
         }
-        if (!result.stderr.empty()) {
-            appendLog(QString::fromStdString(result.stderr));
+        if (!result.stderr.empty() && self) {
+            self->appendLog(QString::fromStdString(result.stderr));
         }
         bool success = (result.exitCode == 0);
 
-        QMetaObject::invokeMethod(this, [this, success, name]() {
+        QMetaObject::invokeMethod(self, [self, success, name]() {
+            if (!self) return;
             if (success) {
-                appendLog("Kernel installation finished successfully: " + name);
-                setStatusMessage("Kernel installed successfully", false);
+                self->appendLog("Kernel installation finished successfully: " + name);
+                self->setStatusMessage("Kernel installed successfully", false);
             } else {
-                appendLog("ERROR: Main kernel installation failed for " + name);
-                setStatusMessage("Installation failed", true);
+                self->appendLog("ERROR: Main kernel installation failed for " + name);
+                self->setStatusMessage("Installation failed", true);
             }
-            setBusy(false);
-            updateKernels();
-            updateDkmsModules();
-            updateDefaultKernel();
+            self->setBusy(false);
+            self->updateKernels();
+            self->updateDkmsModules();
+            self->updateDefaultKernel();
         });
     });
     (void)future;
 }
 
 void KernelBridge::reconfigureKernel(const QString &name, const QString &type, const QString &version) {
+    if (!isValidPkgName(name)) {
+        appendLog("SECURITY ERROR: Invalid package name: " + name);
+        setStatusMessage("Invalid package name", true);
+        return;
+    }
+    if (!version.isEmpty() && !isValidVersion(version)) {
+        appendLog("SECURITY ERROR: Invalid kernel version: " + version);
+        setStatusMessage("Invalid kernel version", true);
+        return;
+    }
+
     appendLog("Initiating kernel reconfiguration (DKMS rebuild & initramfs generation) for: " + name);
     setBusy(true);
     setProgress(15);
     setStatusMessage("Reconfiguring kernel & DKMS modules...", false);
 
-    auto future = QtConcurrent::run([this, name, type, version]() {
+    QPointer<KernelBridge> self(this);
+    auto future = QtConcurrent::run([self, name, type, version]() {
+        if (!self) return;
         bool isManual = (type.toLower() == "manual") || (type.toLower() == "vkpurge");
         std::string cmd;
         std::string ver = version.toStdString();
@@ -279,23 +318,24 @@ void KernelBridge::reconfigureKernel(const QString &name, const QString &type, c
             }
         }
 
-        appendLog("Executing: " + QString::fromStdString(cmd));
+        self->appendLog("Executing: " + QString::fromStdString(cmd));
         auto result = utils::execWithOutput(cmd);
-        if (!result.stdout.empty()) appendLog(QString::fromStdString(result.stdout));
-        if (!result.stderr.empty()) appendLog(QString::fromStdString(result.stderr));
+        if (!result.stdout.empty() && self) self->appendLog(QString::fromStdString(result.stdout));
+        if (!result.stderr.empty() && self) self->appendLog(QString::fromStdString(result.stderr));
         bool success = (result.exitCode == 0);
 
-        QMetaObject::invokeMethod(this, [this, success, name]() {
+        QMetaObject::invokeMethod(self, [self, success, name]() {
+            if (!self) return;
             if (success) {
-                appendLog("Kernel reconfiguration completed successfully: " + name);
-                setStatusMessage("Kernel reconfigured successfully", false);
+                self->appendLog("Kernel reconfiguration completed successfully: " + name);
+                self->setStatusMessage("Kernel reconfigured successfully", false);
             } else {
-                appendLog("ERROR: Kernel reconfiguration failed for: " + name);
-                setStatusMessage("Reconfiguration failed", true);
+                self->appendLog("ERROR: Kernel reconfiguration failed for: " + name);
+                self->setStatusMessage("Reconfiguration failed", true);
             }
-            setBusy(false);
-            updateKernels();
-            updateDkmsModules();
+            self->setBusy(false);
+            self->updateKernels();
+            self->updateDkmsModules();
         });
     });
     (void)future;
@@ -305,6 +345,17 @@ void KernelBridge::reconfigureKernel(const QString &name, const QString &type, c
 // removeKernel – CORREGIDA con detección de error por dependencias
 // ----------------------------------------------------------------------------
 void KernelBridge::removeKernel(const QString &name, const QString &type, const QString &version) {
+    if (!isValidPkgName(name)) {
+        appendLog("SECURITY ERROR: Invalid kernel package name: " + name);
+        setStatusMessage("Invalid package name", true);
+        return;
+    }
+    if (!version.isEmpty() && !isValidVersion(version)) {
+        appendLog("SECURITY ERROR: Invalid kernel version: " + version);
+        setStatusMessage("Invalid kernel version", true);
+        return;
+    }
+
     bool isVkpurge = (type.toLower() == "vkpurge");
     bool isManual = (type.toLower() == "manual") || isVkpurge;
     QString runningVer = activeKernelVersion().trimmed();
@@ -369,14 +420,19 @@ void KernelBridge::removeKernel(const QString &name, const QString &type, const 
     setBusy(true);
     setProgress(10);
 
-    auto future = QtConcurrent::run([this, name, type, targetVersion, isManual, isVkpurge]() {
+    QPointer<KernelBridge> self(this);
+    auto future = QtConcurrent::run([self, name, targetVersion, isManual, isVkpurge]() {
+        if (!self) return;
         std::string cmd;
         std::string tempScriptPath;
         bool success = false;
-        bool dependencyError = false;
 
         // Función auxiliar para borrar archivos manualmente (reutilizable)
         auto removeFilesManually = [&](const std::string &ver) -> bool {
+            if (!isValidVersion(QString::fromStdString(ver))) {
+                if (self) self->appendLog("SECURITY ERROR: Invalid version format for file removal: " + QString::fromStdString(ver));
+                return false;
+            }
             char tempPathTemplate[] = "/tmp/neko-kernel-remove-XXXXXX";
             int fd = mkstemp(tempPathTemplate);
             if (fd != -1) {
@@ -388,11 +444,10 @@ void KernelBridge::removeKernel(const QString &name, const QString &type, const 
                                      " /boot/vmlinuz-" + ver + ".old /boot/initramfs-" + ver + ".old.img\n"
                                      "rm -rf /usr/lib/modules/" + ver + " /lib/modules/" + ver + "\n"
                                      "(which grub-mkconfig >/dev/null 2>&1 && grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1 || true)\n";
-                ssize_t bytesWritten = write(fd, script.c_str(), script.size());
-                (void)bytesWritten;
-                (void)fchmod(fd, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+                write(fd, script.c_str(), script.size());
+                fchmod(fd, S_IRUSR | S_IWUSR | S_IXUSR);
                 close(fd);
-                cmd = "pkexec sh " + tempScriptPath;
+                cmd = "pkexec sh '" + tempScriptPath + "'";
             } else {
                 cmd = "pkexec sh -c \"if [ -n '" + ver + "' ]; then "
                       "rm -f /boot/vmlinuz-" + ver +
@@ -403,13 +458,13 @@ void KernelBridge::removeKernel(const QString &name, const QString &type, const 
                       "(which grub-mkconfig >/dev/null 2>&1 && grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1 || true); "
                       "fi\"";
             }
-            appendLog("Executing manual removal: " + QString::fromStdString(cmd));
-            bool ok = utils::runPrivilegedCommand(cmd);
+            if (self) self->appendLog("Executing manual removal: " + QString::fromStdString(cmd));
+            auto res = utils::execWithOutput(cmd);
             if (!tempScriptPath.empty()) {
                 unlink(tempScriptPath.c_str());
                 tempScriptPath.clear();
             }
-            return ok;
+            return (res.exitCode == 0);
         };
 
         if (isVkpurge) {
@@ -424,19 +479,19 @@ void KernelBridge::removeKernel(const QString &name, const QString &type, const 
                       "rm -rf /usr/lib/modules/" + ver + " /lib/modules/" + ver + "; "
                       "(which grub-mkconfig >/dev/null 2>&1 && grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1 || true))\"";
             }
-            appendLog("Executing removal: " + QString::fromStdString(cmd));
+            if (self) self->appendLog("Executing removal: " + QString::fromStdString(cmd));
             auto result = utils::execWithOutput(cmd);
-            if (!result.stdout.empty()) appendLog(QString::fromStdString(result.stdout));
-            if (!result.stderr.empty()) appendLog(QString::fromStdString(result.stderr));
+            if (!result.stdout.empty() && self) self->appendLog(QString::fromStdString(result.stdout));
+            if (!result.stderr.empty() && self) self->appendLog(QString::fromStdString(result.stderr));
             success = (result.exitCode == 0);
         } else if (isManual) {
             std::string ver = targetVersion.toStdString();
             if (hasPrivilegedHelper()) {
                 cmd = "pkexec " + HELPER_PATH.toStdString() + " manual-remove " + ver;
-                appendLog("Executing manual removal: " + QString::fromStdString(cmd));
+                if (self) self->appendLog("Executing manual removal: " + QString::fromStdString(cmd));
                 auto result = utils::execWithOutput(cmd);
-                if (!result.stdout.empty()) appendLog(QString::fromStdString(result.stdout));
-                if (!result.stderr.empty()) appendLog(QString::fromStdString(result.stderr));
+                if (!result.stdout.empty() && self) self->appendLog(QString::fromStdString(result.stdout));
+                if (!result.stderr.empty() && self) self->appendLog(QString::fromStdString(result.stderr));
                 success = (result.exitCode == 0);
             } else {
                 success = removeFilesManually(ver);
@@ -448,7 +503,7 @@ void KernelBridge::removeKernel(const QString &name, const QString &type, const 
             std::string headersPkg = pkgName + "-headers";
             if (utils::packageInstalled(headersPkg)) {
                 toRemove += " " + headersPkg;
-                appendLog("Kernel headers package also detected (" + QString::fromStdString(headersPkg) + ") and included in removal.");
+                if (self) self->appendLog("Kernel headers package also detected (" + QString::fromStdString(headersPkg) + ") and included in removal.");
             }
 
             if (hasPrivilegedHelper()) {
@@ -456,25 +511,26 @@ void KernelBridge::removeKernel(const QString &name, const QString &type, const 
             } else {
                 cmd = "pkexec sh -c \"xbps-remove -Rfy " + toRemove + " || xbps-remove -RFy " + toRemove + "\"";
             }
-            appendLog("Executing xbps-remove: " + QString::fromStdString(cmd));
+            if (self) self->appendLog("Executing xbps-remove: " + QString::fromStdString(cmd));
             auto result = utils::execWithOutput(cmd);
-            if (!result.stdout.empty()) appendLog(QString::fromStdString(result.stdout));
-            if (!result.stderr.empty()) appendLog(QString::fromStdString(result.stderr));
+            if (!result.stdout.empty() && self) self->appendLog(QString::fromStdString(result.stdout));
+            if (!result.stderr.empty() && self) self->appendLog(QString::fromStdString(result.stderr));
             success = (result.exitCode == 0);
         }
 
-        QMetaObject::invokeMethod(this, [this, success, name]() {
+        QMetaObject::invokeMethod(self, [self, success, name]() {
+            if (!self) return;
             if (success) {
-                appendLog("Kernel removal completed successfully: " + name);
-                setStatusMessage("Kernel removed successfully", false);
+                self->appendLog("Kernel removal completed successfully: " + name);
+                self->setStatusMessage("Kernel removed successfully", false);
             } else {
-                appendLog("ERROR: Kernel removal failed for " + name);
-                setStatusMessage("Removal failed", true);
+                self->appendLog("ERROR: Kernel removal failed for " + name);
+                self->setStatusMessage("Removal failed", true);
             }
-            setBusy(false);
-            updateKernels();
-            updateDkmsModules();
-            updateDefaultKernel();
+            self->setBusy(false);
+            self->updateKernels();
+            self->updateDkmsModules();
+            self->updateDefaultKernel();
         });
     });
     (void)future;
@@ -491,7 +547,10 @@ void KernelBridge::vkpurge() {
     setBusy(true);
     setProgress(10);
     setStatusMessage("Purging all old kernels...", false);
-    auto future = QtConcurrent::run([this]() {
+
+    QPointer<KernelBridge> self(this);
+    auto future = QtConcurrent::run([self]() {
+        if (!self) return;
         std::string cmd;
         if (hasPrivilegedHelper()) {
             cmd = "pkexec " + HELPER_PATH.toStdString() + " vkpurge-rm-all";
@@ -499,35 +558,38 @@ void KernelBridge::vkpurge() {
             cmd = "pkexec vkpurge rm all";
         }
 
-        QMetaObject::invokeMethod(this, [this]() {
-            setProgress(30);
-            setStatusMessage("Running vkpurge...", false);
+        QMetaObject::invokeMethod(self, [self]() {
+            if (self) {
+                self->setProgress(30);
+                self->setStatusMessage("Running vkpurge...", false);
+            }
         });
 
         auto result = utils::execWithOutput(cmd);
-        if (!result.stdout.empty()) {
-            appendLog(QString::fromStdString(result.stdout));
+        if (!result.stdout.empty() && self) {
+            self->appendLog(QString::fromStdString(result.stdout));
         }
-        if (!result.stderr.empty()) {
-            appendLog(QString::fromStdString(result.stderr));
+        if (!result.stderr.empty() && self) {
+            self->appendLog(QString::fromStdString(result.stderr));
         }
         bool success = (result.exitCode == 0);
 
-        QMetaObject::invokeMethod(this, [this, success]() {
-            setBusy(false);
-            setProgress(success ? 100 : 0);
+        QMetaObject::invokeMethod(self, [self, success]() {
+            if (!self) return;
+            self->setBusy(false);
+            self->setProgress(success ? 100 : 0);
             if (success) {
-                appendLog("vkpurge completed successfully.");
-                setStatusMessage("Old kernels purged successfully", false);
-                emit operationFinished("Kernels purged");
+                self->appendLog("vkpurge completed successfully.");
+                self->setStatusMessage("Old kernels purged successfully", false);
+                emit self->operationFinished("Kernels purged");
             } else {
-                appendLog("ERROR: vkpurge failed.");
-                setStatusMessage("vkpurge failed", true);
+                self->appendLog("ERROR: vkpurge failed.");
+                self->setStatusMessage("vkpurge failed", true);
             }
-            setBusy(false);
-            updateKernels();
-            updateDkmsModules();
-            updateDefaultKernel();
+            self->setBusy(false);
+            self->updateKernels();
+            self->updateDkmsModules();
+            self->updateDefaultKernel();
         });
     });
     (void)future;
@@ -678,16 +740,20 @@ void KernelBridge::updateDkmsModules() {
     if (!utils::commandExists("xbps-query")) {
         appendLog("WARNING: 'xbps-query' command not found; Void DKMS package repository scan is disabled.");
     }
-    auto future = QtConcurrent::run([this]() {
-        auto dkmsList = getDkmsModulesInternal();
-        QMetaObject::invokeMethod(this, [this, dkmsList]() {
-            m_dkmsCache = dkmsList;
-            setBusy(false);
-            emit dkmsModulesChanged();
-            appendLog(QString("DKMS scan completed. Found %1 modules/packages:").arg(dkmsList.size()));
+
+    QPointer<KernelBridge> self(this);
+    auto future = QtConcurrent::run([self]() {
+        if (!self) return;
+        auto dkmsList = self->getDkmsModulesInternal();
+        QMetaObject::invokeMethod(self, [self, dkmsList]() {
+            if (!self) return;
+            self->m_dkmsCache = dkmsList;
+            self->setBusy(false);
+            emit self->dkmsModulesChanged();
+            self->appendLog(QString("DKMS scan completed. Found %1 modules/packages:").arg(dkmsList.size()));
             for (const auto &var : dkmsList) {
                 QVariantMap m = var.toMap();
-                appendLog(QString("  • %1 v%2 (Kernel: %3) [Status: %4]")
+                self->appendLog(QString("  • %1 v%2 (Kernel: %3) [Status: %4]")
                             .arg(m["name"].toString())
                             .arg(m["version"].toString())
                             .arg(m["kernel"].toString())
@@ -699,6 +765,22 @@ void KernelBridge::updateDkmsModules() {
 }
 
 void KernelBridge::installDkmsModule(const QString &name, const QString &version, const QString &kernel) {
+    if (!isValidPkgName(name)) {
+        appendLog("SECURITY ERROR: Invalid DKMS module/package name: " + name);
+        setStatusMessage("Invalid module name", true);
+        return;
+    }
+    if (!version.isEmpty() && !isValidVersion(version)) {
+        appendLog("SECURITY ERROR: Invalid module version: " + version);
+        setStatusMessage("Invalid version", true);
+        return;
+    }
+    if (!kernel.isEmpty() && !isValidVersion(kernel)) {
+        appendLog("SECURITY ERROR: Invalid kernel version for DKMS: " + kernel);
+        setStatusMessage("Invalid kernel version", true);
+        return;
+    }
+
     bool isPackage = name.endsWith("-dkms");
     if (isPackage) {
         appendLog("Starting installation of XBPS DKMS package: " + name);
@@ -707,7 +789,9 @@ void KernelBridge::installDkmsModule(const QString &name, const QString &version
     }
     setBusy(true);
 
-    auto future = QtConcurrent::run([this, name, version, kernel, isPackage]() {
+    QPointer<KernelBridge> self(this);
+    auto future = QtConcurrent::run([self, name, version, kernel, isPackage]() {
+        if (!self) return;
         bool success = true;
         bool isNvidia = name.toLower().contains("nvidia");
 
@@ -719,19 +803,21 @@ void KernelBridge::installDkmsModule(const QString &name, const QString &version
             } else {
                 cmd = "pkexec xbps-install -y " + name.toStdString();
             }
-            appendLog("Executing package install: " + QString::fromStdString(cmd));
+            if (self) self->appendLog("Executing package install: " + QString::fromStdString(cmd));
             auto result = utils::execWithOutput(cmd);
-            if (!result.stdout.empty()) {
-                appendLog(QString::fromStdString(result.stdout));
+            if (!result.stdout.empty() && self) {
+                self->appendLog(QString::fromStdString(result.stdout));
             }
-            if (!result.stderr.empty()) {
-                appendLog(QString::fromStdString(result.stderr));
+            if (!result.stderr.empty() && self) {
+                self->appendLog(QString::fromStdString(result.stderr));
             }
             success = (result.exitCode == 0);
-            if (success) {
-                appendLog("XBPS DKMS package installed: " + name);
-            } else {
-                appendLog("ERROR: XBPS DKMS package installation failed for " + name);
+            if (self) {
+                if (success) {
+                    self->appendLog("XBPS DKMS package installed: " + name);
+                } else {
+                    self->appendLog("ERROR: XBPS DKMS package installation failed for " + name);
+                }
             }
         } else {
             // Instalar módulo DKMS manualmente y regenerar initramfs con dracut
@@ -745,20 +831,19 @@ void KernelBridge::installDkmsModule(const QString &name, const QString &version
                       " -k " + kver +
                       " && (which dracut >/dev/null 2>&1 && dracut --force /boot/initramfs-" + kver + ".img " + kver + " || true)\"";
             }
-            appendLog("Executing dkms install: " + QString::fromStdString(cmd));
+            if (self) self->appendLog("Executing dkms install: " + QString::fromStdString(cmd));
             auto result = utils::execWithOutput(cmd);
-            if (!result.stdout.empty()) {
-                appendLog(QString::fromStdString(result.stdout));
+            if (!result.stdout.empty() && self) {
+                self->appendLog(QString::fromStdString(result.stdout));
             }
-            if (!result.stderr.empty()) {
-                appendLog(QString::fromStdString(result.stderr));
+            if (!result.stderr.empty() && self) {
+                self->appendLog(QString::fromStdString(result.stderr));
             }
             success = (result.exitCode == 0);
         }
 
         // Manejo especial para NVIDIA si se instaló el paquete y es NVIDIA
         if (isNvidia && success && isPackage) {
-            // Forzar instalación para kernels compatibles (>=6.18)
             std::string nvidiaVersion;
             std::string srcRoot = "/usr/src";
             if (std::filesystem::exists(srcRoot) && std::filesystem::is_directory(srcRoot)) {
@@ -833,41 +918,58 @@ void KernelBridge::installDkmsModule(const QString &name, const QString &version
                             dkmsCmd = "pkexec sh -c \"" + chain + "\"";
                         }
 
-                        appendLog("Forcing batched NVIDIA DKMS install for detected kernels...");
+                        if (self) self->appendLog("Forcing batched NVIDIA DKMS install for detected kernels...");
                         auto result2 = utils::execWithOutput(dkmsCmd);
-                        if (!result2.stdout.empty()) {
-                            appendLog(QString::fromStdString(result2.stdout));
+                        if (!result2.stdout.empty() && self) {
+                            self->appendLog(QString::fromStdString(result2.stdout));
                         }
-                        if (!result2.stderr.empty()) {
-                            appendLog(QString::fromStdString(result2.stderr));
+                        if (!result2.stderr.empty() && self) {
+                            self->appendLog(QString::fromStdString(result2.stderr));
                         }
-                    } else {
-                        appendLog("No additional kernels required forced NVIDIA DKMS install.");
+                    } else if (self) {
+                        self->appendLog("No additional kernels required forced NVIDIA DKMS install.");
                     }
-                } else {
-                    appendLog("ERROR: No kernel modules directory found for forced NVIDIA DKMS install.");
+                } else if (self) {
+                    self->appendLog("ERROR: No kernel modules directory found for forced NVIDIA DKMS install.");
                 }
-            } else {
-                appendLog("ERROR: Could not determine NVIDIA DKMS version.");
+            } else if (self) {
+                self->appendLog("ERROR: Could not determine NVIDIA DKMS version.");
             }
         }
 
-        QMetaObject::invokeMethod(this, [this, success, isPackage, name]() {
+        QMetaObject::invokeMethod(self, [self, success, isPackage, name]() {
+            if (!self) return;
             if (success) {
-                appendLog((isPackage ? "XBPS DKMS package installation finished: " : "DKMS module installation finished: ") + name);
-                setStatusMessage(isPackage ? "XBPS DKMS Package installed" : "DKMS module installed", false);
+                self->appendLog((isPackage ? "XBPS DKMS package installation finished: " : "DKMS module installation finished: ") + name);
+                self->setStatusMessage(isPackage ? "XBPS DKMS Package installed" : "DKMS module installed", false);
             } else {
-                appendLog((isPackage ? "ERROR: XBPS DKMS package installation failed: " : "ERROR: DKMS module installation failed: ") + name);
-                setStatusMessage(isPackage ? "XBPS package installation failed" : "DKMS module installation failed", true);
+                self->appendLog((isPackage ? "ERROR: XBPS DKMS package installation failed: " : "ERROR: DKMS module installation failed: ") + name);
+                self->setStatusMessage(isPackage ? "XBPS package installation failed" : "DKMS module installation failed", true);
             }
-            setBusy(false);
-            updateDkmsModules();
+            self->setBusy(false);
+            self->updateDkmsModules();
         });
     });
     (void)future;
 }
 
 void KernelBridge::removeDkmsModule(const QString &name, const QString &version, const QString &kernel) {
+    if (!isValidPkgName(name)) {
+        appendLog("SECURITY ERROR: Invalid DKMS module/package name: " + name);
+        setStatusMessage("Invalid module name", true);
+        return;
+    }
+    if (!version.isEmpty() && !isValidVersion(version)) {
+        appendLog("SECURITY ERROR: Invalid module version: " + version);
+        setStatusMessage("Invalid version", true);
+        return;
+    }
+    if (!kernel.isEmpty() && !isValidVersion(kernel)) {
+        appendLog("SECURITY ERROR: Invalid kernel version: " + kernel);
+        setStatusMessage("Invalid kernel version", true);
+        return;
+    }
+
     bool isPackage = name.endsWith("-dkms");
     if (isPackage) {
         appendLog("Starting removal of XBPS DKMS package: " + name);
@@ -876,7 +978,9 @@ void KernelBridge::removeDkmsModule(const QString &name, const QString &version,
     }
     setBusy(true);
 
-    auto future = QtConcurrent::run([this, name, version, kernel, isPackage]() {
+    QPointer<KernelBridge> self(this);
+    auto future = QtConcurrent::run([self, name, version, kernel, isPackage]() {
+        if (!self) return;
         std::string cmd;
         if (hasPrivilegedHelper()) {
             if (isPackage) {
@@ -901,26 +1005,27 @@ void KernelBridge::removeDkmsModule(const QString &name, const QString &version,
                 }
             }
         }
-        appendLog("Executing: " + QString::fromStdString(cmd));
+        if (self) self->appendLog("Executing: " + QString::fromStdString(cmd));
         auto result = utils::execWithOutput(cmd);
-        if (!result.stdout.empty()) {
-            appendLog(QString::fromStdString(result.stdout));
+        if (!result.stdout.empty() && self) {
+            self->appendLog(QString::fromStdString(result.stdout));
         }
-        if (!result.stderr.empty()) {
-            appendLog(QString::fromStdString(result.stderr));
+        if (!result.stderr.empty() && self) {
+            self->appendLog(QString::fromStdString(result.stderr));
         }
         bool success = (result.exitCode == 0);
 
-        QMetaObject::invokeMethod(this, [this, success, isPackage, name]() {
+        QMetaObject::invokeMethod(self, [self, success, isPackage, name]() {
+            if (!self) return;
             if (success) {
-                appendLog((isPackage ? "XBPS DKMS package removal finished: " : "DKMS module removal finished: ") + name);
-                setStatusMessage(isPackage ? "XBPS DKMS Package removed" : "DKMS module removed", false);
+                self->appendLog((isPackage ? "XBPS DKMS package removal finished: " : "DKMS module removal finished: ") + name);
+                self->setStatusMessage(isPackage ? "XBPS DKMS Package removed" : "DKMS module removed", false);
             } else {
-                appendLog((isPackage ? "ERROR: XBPS DKMS package removal failed: " : "ERROR: DKMS module removal failed: ") + name);
-                setStatusMessage(isPackage ? "XBPS package removal failed" : "DKMS module removal failed", true);
+                self->appendLog((isPackage ? "ERROR: XBPS DKMS package removal failed: " : "ERROR: DKMS module removal failed: ") + name);
+                self->setStatusMessage(isPackage ? "XBPS package removal failed" : "DKMS module removal failed", true);
             }
-            setBusy(false);
-            updateDkmsModules();
+            self->setBusy(false);
+            self->updateDkmsModules();
         });
     });
     (void)future;
@@ -931,7 +1036,9 @@ void KernelBridge::autoinstallDkms() {
     appendLog("Initiating DKMS autoinstall for active kernel: " + activeK);
     setBusy(true);
 
-    auto future = QtConcurrent::run([this, activeK]() {
+    QPointer<KernelBridge> self(this);
+    auto future = QtConcurrent::run([self, activeK]() {
+        if (!self) return;
         std::string runningK = activeK.toStdString();
         std::string cmd;
         if (hasPrivilegedHelper()) {
@@ -939,26 +1046,27 @@ void KernelBridge::autoinstallDkms() {
         } else {
             cmd = "pkexec sh -c \"dkms autoinstall -k " + runningK + " && (which dracut >/dev/null 2>&1 && dracut --force /boot/initramfs-" + runningK + ".img " + runningK + " || true)\"";
         }
-        appendLog("Executing dkms autoinstall: " + QString::fromStdString(cmd));
+        if (self) self->appendLog("Executing dkms autoinstall: " + QString::fromStdString(cmd));
         auto result = utils::execWithOutput(cmd);
-        if (!result.stdout.empty()) {
-            appendLog(QString::fromStdString(result.stdout));
+        if (!result.stdout.empty() && self) {
+            self->appendLog(QString::fromStdString(result.stdout));
         }
-        if (!result.stderr.empty()) {
-            appendLog(QString::fromStdString(result.stderr));
+        if (!result.stderr.empty() && self) {
+            self->appendLog(QString::fromStdString(result.stderr));
         }
         bool success = (result.exitCode == 0);
 
-        QMetaObject::invokeMethod(this, [this, success]() {
+        QMetaObject::invokeMethod(self, [self, success]() {
+            if (!self) return;
             if (success) {
-                appendLog("DKMS autoinstall and initramfs update completed successfully.");
-                setStatusMessage("DKMS autoinstall completed", false);
+                self->appendLog("DKMS autoinstall and initramfs update completed successfully.");
+                self->setStatusMessage("DKMS autoinstall completed", false);
             } else {
-                appendLog("ERROR: DKMS autoinstall failed.");
-                setStatusMessage("DKMS autoinstall failed", true);
+                self->appendLog("ERROR: DKMS autoinstall failed.");
+                self->setStatusMessage("DKMS autoinstall failed", true);
             }
-            setBusy(false);
-            updateDkmsModules();
+            self->setBusy(false);
+            self->updateDkmsModules();
         });
     });
     (void)future;
@@ -1015,25 +1123,36 @@ QString KernelBridge::getDefaultKernelInternal() {
 }
 
 void KernelBridge::updateDefaultKernel() {
-    auto future = QtConcurrent::run([this]() {
-        QString def = getDefaultKernelInternal();
-        QMetaObject::invokeMethod(this, [this, def]() {
-            m_defaultKernel = def;
-            emit defaultKernelChanged();
-            appendLog("Current default boot kernel is set to: " + def);
+    QPointer<KernelBridge> self(this);
+    auto future = QtConcurrent::run([self]() {
+        if (!self) return;
+        QString def = self->getDefaultKernelInternal();
+        QMetaObject::invokeMethod(self, [self, def]() {
+            if (!self) return;
+            self->m_defaultKernel = def;
+            emit self->defaultKernelChanged();
+            self->appendLog("Current default boot kernel is set to: " + def);
         });
     });
     (void)future;
 }
 
 void KernelBridge::setDefaultKernel(const QString &kernelVersion) {
+    if (!isValidVersion(kernelVersion)) {
+        appendLog("SECURITY ERROR: Invalid kernel version format: " + kernelVersion);
+        setStatusMessage("Invalid kernel version", true);
+        return;
+    }
+
     // Usar invokeMethod para asegurar que appendLog y setBusy se llaman en el hilo principal
     QMetaObject::invokeMethod(this, [this, kernelVersion]() {
         appendLog("Requesting default boot kernel change to: " + kernelVersion);
         setBusy(true);
     }, Qt::QueuedConnection);
 
-    auto future = QtConcurrent::run([this, kernelVersion]() {
+    QPointer<KernelBridge> self(this);
+    auto future = QtConcurrent::run([self, kernelVersion]() {
+        if (!self) return;
         std::string cmd;
         std::string tempScriptPath;
 
@@ -1079,7 +1198,7 @@ void KernelBridge::setDefaultKernel(const QString &kernelVersion) {
             if (fd != -1) {
                 tempScriptPath = templatePath;
                 write(fd, commandChain.c_str(), commandChain.size());
-                fchmod(fd, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+                fchmod(fd, S_IRUSR | S_IWUSR | S_IXUSR);
                 close(fd);
                 cmd = "pkexec sh '" + tempScriptPath + "'";
             } else {
@@ -1091,29 +1210,30 @@ void KernelBridge::setDefaultKernel(const QString &kernelVersion) {
             cmd += "; rm -f '" + tempScriptPath + "'";
         }
 
-        appendLog("Executing GRUB update: " + QString::fromStdString(cmd));
+        if (self) self->appendLog("Executing GRUB update: " + QString::fromStdString(cmd));
         auto result = utils::execWithOutput(cmd);
-        if (!result.stdout.empty()) {
-            appendLog(QString::fromStdString(result.stdout));
+        if (!result.stdout.empty() && self) {
+            self->appendLog(QString::fromStdString(result.stdout));
         }
-        if (!result.stderr.empty()) {
-            appendLog(QString::fromStdString(result.stderr));
+        if (!result.stderr.empty() && self) {
+            self->appendLog(QString::fromStdString(result.stderr));
         }
         bool success = (result.exitCode == 0);
 
-        QMetaObject::invokeMethod(this, [this, success, kernelVersion]() {
+        QMetaObject::invokeMethod(self, [self, success, kernelVersion]() {
+            if (!self) return;
             if (success) {
-                appendLog("Default boot kernel changed to " + kernelVersion + " successfully.");
-                setStatusMessage("Default kernel updated", false);
-                m_defaultKernel = kernelVersion;
-                emit defaultKernelChanged();
+                self->appendLog("Default boot kernel changed to " + kernelVersion + " successfully.");
+                self->setStatusMessage("Default kernel updated", false);
+                self->m_defaultKernel = kernelVersion;
+                emit self->defaultKernelChanged();
             } else {
-                appendLog("ERROR: Failed to change default kernel to " + kernelVersion);
-                setStatusMessage("Failed to update default kernel", true);
+                self->appendLog("ERROR: Failed to change default kernel to " + kernelVersion);
+                self->setStatusMessage("Failed to update default kernel", true);
             }
-            updateDefaultKernel();
-            updateKernels();
-            setBusy(false);
+            self->updateDefaultKernel();
+            self->updateKernels();
+            self->setBusy(false);
         });
     });
     (void)future;

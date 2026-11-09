@@ -21,16 +21,6 @@ bool Kernel::has_files() const {
     return m_pkg.has_files;
 }
 
-bool Kernel::install() {
-    // La lógica real está en KernelBridge::installKernel
-    return true;
-}
-
-bool Kernel::remove() {
-    // La lógica real está en KernelBridge::removeKernel
-    return true;
-}
-
 std::string Kernel::category() const {
     if (m_pkg.type == "vkpurge") return "Orphan / Obsolete";
     if (m_pkg.name.find("bore") != std::string::npos) return "BORE";

@@ -19,8 +19,6 @@ public:
     std::string version() const;
     bool is_installed() const;
     bool has_files() const;          // NUEVO: consulta si los archivos existen
-    bool install();
-    bool remove();
     std::string category() const;
     std::string size() const;
     std::string installDate() const;
