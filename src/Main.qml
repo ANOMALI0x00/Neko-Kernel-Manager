@@ -376,29 +376,6 @@ ApplicationWindow {
 
                 Item { Layout.fillWidth: true }
 
-                // Center Title & Subtitle (CSD Style)
-                ColumnLayout {
-                    spacing: 1
-                    Layout.alignment: Qt.AlignHCenter | Qt.AlignVCenter
-                    Text {
-                        text: qsTr("Neko Kernel Manager")
-                        color: themeColors.text
-                        font.pixelSize: 14
-                        font.weight: Font.DemiBold
-                        horizontalAlignment: Text.AlignHCenter
-                        Layout.alignment: Qt.AlignHCenter
-                    }
-                    Text {
-                        text: qsTr("Void Linux")
-                        color: themeColors.muted
-                        font.pixelSize: 11
-                        horizontalAlignment: Text.AlignHCenter
-                        Layout.alignment: Qt.AlignHCenter
-                    }
-                }
-
-                Item { Layout.fillWidth: true }
-
                 // Right buttons
                 GtkHeaderButton {
                     symbol: "\uf1b3"
