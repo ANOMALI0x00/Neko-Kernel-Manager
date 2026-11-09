@@ -14,6 +14,12 @@
 #include <unistd.h>
 #include <pwd.h>
 
+static const QString HELPER_PATH = "/usr/libexec/neko-kernel-manager/neko-kernel-helper";
+
+static bool hasPrivilegedHelper() {
+    return QFile::exists(HELPER_PATH);
+}
+
 KernelBridge::KernelBridge(QObject *parent) : QObject(parent), m_verbose(false) {
 }
 
@@ -210,8 +216,13 @@ void KernelBridge::installKernel(const QString &name) {
     auto future = QtConcurrent::run([this, name]() {
         std::string pkgName = name.toStdString();
         std::string headersPkg = pkgName + "-headers";
+        std::string cmd;
 
-        std::string cmd = "pkexec sh -c \"xbps-install -y " + pkgName + " && (xbps-install -y " + headersPkg + " || true)\"";
+        if (hasPrivilegedHelper()) {
+            cmd = "pkexec " + HELPER_PATH.toStdString() + " install-kernel " + pkgName + " " + headersPkg;
+        } else {
+            cmd = "pkexec sh -c \"xbps-install -y " + pkgName + " && (xbps-install -y " + headersPkg + " || true)\"";
+        }
         appendLog("Executing: " + QString::fromStdString(cmd));
 
         auto result = utils::execWithOutput(cmd);
@@ -249,14 +260,23 @@ void KernelBridge::reconfigureKernel(const QString &name, const QString &type, c
     auto future = QtConcurrent::run([this, name, type, version]() {
         bool isManual = (type.toLower() == "manual") || (type.toLower() == "vkpurge");
         std::string cmd;
-        if (!isManual && utils::packageInstalled(name.toStdString())) {
-            cmd = "pkexec xbps-reconfigure -f " + name.toStdString();
+        std::string ver = version.toStdString();
+        if (ver.empty()) ver = name.toStdString();
+
+        if (hasPrivilegedHelper()) {
+            if (!isManual && utils::packageInstalled(name.toStdString())) {
+                cmd = "pkexec " + HELPER_PATH.toStdString() + " reconfigure-kernel " + name.toStdString();
+            } else {
+                cmd = "pkexec " + HELPER_PATH.toStdString() + " reconfigure-manual " + name.toStdString() + " " + ver;
+            }
         } else {
-            std::string ver = version.toStdString();
-            if (ver.empty()) ver = name.toStdString();
-            cmd = "pkexec sh -c \"if [ -x /etc/kernel.d/post-install/10-dkms ]; then /etc/kernel.d/post-install/10-dkms '" + name.toStdString() + "' '" + ver + "'; fi && "
-                  "if which dracut >/dev/null 2>&1; then dracut --force /boot/initramfs-" + ver + ".img " + ver + "; fi && "
-                  "(which grub-mkconfig >/dev/null 2>&1 && grub-mkconfig -o /boot/grub/grub.cfg || true)\"";
+            if (!isManual && utils::packageInstalled(name.toStdString())) {
+                cmd = "pkexec xbps-reconfigure -f " + name.toStdString();
+            } else {
+                cmd = "pkexec sh -c \"if [ -x /etc/kernel.d/post-install/10-dkms ]; then /etc/kernel.d/post-install/10-dkms '" + name.toStdString() + "' '" + ver + "'; fi && "
+                      "if which dracut >/dev/null 2>&1; then dracut --force /boot/initramfs-" + ver + ".img " + ver + "; fi && "
+                      "(which grub-mkconfig >/dev/null 2>&1 && grub-mkconfig -o /boot/grub/grub.cfg || true)\"";
+            }
         }
 
         appendLog("Executing: " + QString::fromStdString(cmd));
@@ -394,19 +414,33 @@ void KernelBridge::removeKernel(const QString &name, const QString &type, const 
 
         if (isVkpurge) {
             std::string ver = targetVersion.toStdString();
-            cmd = "pkexec vkpurge rm " + ver;
-            appendLog("Executing vkpurge: " + QString::fromStdString(cmd));
+            if (hasPrivilegedHelper()) {
+                cmd = "pkexec " + HELPER_PATH.toStdString() + " vkpurge-rm " + ver;
+            } else {
+                cmd = "pkexec sh -c \"vkpurge rm " + ver + " || "
+                      "(rm -f /boot/vmlinuz-" + ver + " /boot/initramfs-" + ver + ".img /boot/initrd.img-" + ver +
+                      " /boot/config-" + ver + " /boot/System.map-" + ver +
+                      " /boot/vmlinuz-" + ver + ".old /boot/initramfs-" + ver + ".old.img; "
+                      "rm -rf /usr/lib/modules/" + ver + " /lib/modules/" + ver + "; "
+                      "(which grub-mkconfig >/dev/null 2>&1 && grub-mkconfig -o /boot/grub/grub.cfg >/dev/null 2>&1 || true))\"";
+            }
+            appendLog("Executing removal: " + QString::fromStdString(cmd));
             auto result = utils::execWithOutput(cmd);
             if (!result.stdout.empty()) appendLog(QString::fromStdString(result.stdout));
             if (!result.stderr.empty()) appendLog(QString::fromStdString(result.stderr));
             success = (result.exitCode == 0);
-            if (!success) {
-                appendLog("vkpurge rm failed or version not indexed; cleaning files manually...");
-                success = removeFilesManually(ver);
-            }
         } else if (isManual) {
             std::string ver = targetVersion.toStdString();
-            success = removeFilesManually(ver);
+            if (hasPrivilegedHelper()) {
+                cmd = "pkexec " + HELPER_PATH.toStdString() + " manual-remove " + ver;
+                appendLog("Executing manual removal: " + QString::fromStdString(cmd));
+                auto result = utils::execWithOutput(cmd);
+                if (!result.stdout.empty()) appendLog(QString::fromStdString(result.stdout));
+                if (!result.stderr.empty()) appendLog(QString::fromStdString(result.stderr));
+                success = (result.exitCode == 0);
+            } else {
+                success = removeFilesManually(ver);
+            }
         } else {
             // Paquete XBPS (los hooks de /etc/kernel.d/ actualizan GRUB automáticamente)
             std::string pkgName = name.toStdString();
@@ -417,27 +451,16 @@ void KernelBridge::removeKernel(const QString &name, const QString &type, const 
                 appendLog("Kernel headers package also detected (" + QString::fromStdString(headersPkg) + ") and included in removal.");
             }
 
-            cmd = "pkexec xbps-remove -Rfy " + toRemove;
+            if (hasPrivilegedHelper()) {
+                cmd = "pkexec " + HELPER_PATH.toStdString() + " remove-kernel " + toRemove;
+            } else {
+                cmd = "pkexec sh -c \"xbps-remove -Rfy " + toRemove + " || xbps-remove -RFy " + toRemove + "\"";
+            }
             appendLog("Executing xbps-remove: " + QString::fromStdString(cmd));
             auto result = utils::execWithOutput(cmd);
             if (!result.stdout.empty()) appendLog(QString::fromStdString(result.stdout));
             if (!result.stderr.empty()) appendLog(QString::fromStdString(result.stderr));
             success = (result.exitCode == 0);
-
-            // Si falló por dependencias de paquete meta (p. ej. linux o base-system), reintentar con -RFy (force-revdeps)
-            if (!success) {
-                std::string output = result.stdout + result.stderr;
-                if (output.find("breaks installed pkg") != std::string::npos ||
-                    output.find("dependency") != std::string::npos ||
-                    output.find("Transaction aborted") != std::string::npos) {
-                    appendLog("Metapackage reverse dependency conflict detected. Re-attempting removal with XBPS --force-revdeps (-RFy)...");
-                    cmd = "pkexec xbps-remove -RFy " + toRemove;
-                    auto resForce = utils::execWithOutput(cmd);
-                    if (!resForce.stdout.empty()) appendLog(QString::fromStdString(resForce.stdout));
-                    if (!resForce.stderr.empty()) appendLog(QString::fromStdString(resForce.stderr));
-                    success = (resForce.exitCode == 0);
-                }
-            }
         }
 
         QMetaObject::invokeMethod(this, [this, success, name]() {
@@ -469,7 +492,12 @@ void KernelBridge::vkpurge() {
     setProgress(10);
     setStatusMessage("Purging all old kernels...", false);
     auto future = QtConcurrent::run([this]() {
-        std::string cmd = "pkexec vkpurge rm all";
+        std::string cmd;
+        if (hasPrivilegedHelper()) {
+            cmd = "pkexec " + HELPER_PATH.toStdString() + " vkpurge-rm-all";
+        } else {
+            cmd = "pkexec vkpurge rm all";
+        }
 
         QMetaObject::invokeMethod(this, [this]() {
             setProgress(30);
@@ -685,8 +713,13 @@ void KernelBridge::installDkmsModule(const QString &name, const QString &version
 
         if (isPackage) {
             // Instalar paquete xbps
-            std::string cmd = "pkexec xbps-install -y " + name.toStdString();
-            appendLog("Executing xbps-install: " + QString::fromStdString(cmd));
+            std::string cmd;
+            if (hasPrivilegedHelper()) {
+                cmd = "pkexec " + HELPER_PATH.toStdString() + " install-kernel " + name.toStdString();
+            } else {
+                cmd = "pkexec xbps-install -y " + name.toStdString();
+            }
+            appendLog("Executing package install: " + QString::fromStdString(cmd));
             auto result = utils::execWithOutput(cmd);
             if (!result.stdout.empty()) {
                 appendLog(QString::fromStdString(result.stdout));
@@ -703,10 +736,15 @@ void KernelBridge::installDkmsModule(const QString &name, const QString &version
         } else {
             // Instalar módulo DKMS manualmente y regenerar initramfs con dracut
             std::string kver = kernel.toStdString();
-            std::string cmd = "pkexec sh -c \"dkms install -m " + name.toStdString() +
-                              " -v " + version.toStdString() +
-                              " -k " + kver +
-                              " && (which dracut >/dev/null 2>&1 && dracut --force /boot/initramfs-" + kver + ".img " + kver + " || true)\"";
+            std::string cmd;
+            if (hasPrivilegedHelper()) {
+                cmd = "pkexec " + HELPER_PATH.toStdString() + " dkms-install " + name.toStdString() + " " + version.toStdString() + " " + kver;
+            } else {
+                cmd = "pkexec sh -c \"dkms install -m " + name.toStdString() +
+                      " -v " + version.toStdString() +
+                      " -k " + kver +
+                      " && (which dracut >/dev/null 2>&1 && dracut --force /boot/initramfs-" + kver + ".img " + kver + " || true)\"";
+            }
             appendLog("Executing dkms install: " + QString::fromStdString(cmd));
             auto result = utils::execWithOutput(cmd);
             if (!result.stdout.empty()) {
@@ -746,7 +784,7 @@ void KernelBridge::installDkmsModule(const QString &name, const QString &version
                     modulesRoot = "/lib/modules";
                 }
                 if (utils::dirExists(modulesRoot)) {
-                    bool installedAny = false;
+                    std::vector<std::string> targetKernels;
                     for (const auto &entry : std::filesystem::directory_iterator(modulesRoot)) {
                         if (!entry.is_directory()) continue;
                         std::string kernelDir = entry.path().filename().string();
@@ -773,10 +811,29 @@ void KernelBridge::installDkmsModule(const QString &name, const QString &version
                                 }
                             }
                         }
-                        if (!needsForce) continue;
+                        if (needsForce) {
+                            targetKernels.push_back(kernelDir);
+                        }
+                    }
 
-                        std::string dkmsCmd = "pkexec dkms install -m nvidia -v " + nvidiaVersion + " -k " + kernelDir;
-                        appendLog("Forcing NVIDIA DKMS install for kernel " + QString::fromStdString(kernelDir));
+                    if (!targetKernels.empty()) {
+                        std::string dkmsCmd;
+                        if (hasPrivilegedHelper()) {
+                            dkmsCmd = "pkexec " + HELPER_PATH.toStdString() + " nvidia-dkms-install " + nvidiaVersion;
+                            for (const auto &k : targetKernels) {
+                                dkmsCmd += " " + k;
+                            }
+                        } else {
+                            std::string chain;
+                            for (const auto &k : targetKernels) {
+                                if (!chain.empty()) chain += " && ";
+                                chain += "dkms install -m nvidia -v " + nvidiaVersion + " -k " + k +
+                                         " && (which dracut >/dev/null 2>&1 && dracut --force /boot/initramfs-" + k + ".img " + k + " || true)";
+                            }
+                            dkmsCmd = "pkexec sh -c \"" + chain + "\"";
+                        }
+
+                        appendLog("Forcing batched NVIDIA DKMS install for detected kernels...");
                         auto result2 = utils::execWithOutput(dkmsCmd);
                         if (!result2.stdout.empty()) {
                             appendLog(QString::fromStdString(result2.stdout));
@@ -784,12 +841,8 @@ void KernelBridge::installDkmsModule(const QString &name, const QString &version
                         if (!result2.stderr.empty()) {
                             appendLog(QString::fromStdString(result2.stderr));
                         }
-                        if (result2.exitCode == 0) {
-                            installedAny = true;
-                        }
-                    }
-                    if (!installedAny) {
-                        appendLog("WARNING: No NVIDIA kernel directories requiring forced install were found.");
+                    } else {
+                        appendLog("No additional kernels required forced NVIDIA DKMS install.");
                     }
                 } else {
                     appendLog("ERROR: No kernel modules directory found for forced NVIDIA DKMS install.");
@@ -825,16 +878,27 @@ void KernelBridge::removeDkmsModule(const QString &name, const QString &version,
 
     auto future = QtConcurrent::run([this, name, version, kernel, isPackage]() {
         std::string cmd;
-        if (isPackage) {
-            cmd = "pkexec xbps-remove -Rfy " + name.toStdString();
-        } else {
-            if (!kernel.isEmpty()) {
-                cmd = "pkexec dkms remove -m " + name.toStdString() +
-                      " -v " + version.toStdString() +
-                      " -k " + kernel.toStdString();
+        if (hasPrivilegedHelper()) {
+            if (isPackage) {
+                cmd = "pkexec " + HELPER_PATH.toStdString() + " remove-kernel " + name.toStdString();
             } else {
-                cmd = "pkexec dkms remove -m " + name.toStdString() +
-                      " -v " + version.toStdString() + " --all";
+                cmd = "pkexec " + HELPER_PATH.toStdString() + " dkms-remove " + name.toStdString() + " " + version.toStdString();
+                if (!kernel.isEmpty()) {
+                    cmd += " " + kernel.toStdString();
+                }
+            }
+        } else {
+            if (isPackage) {
+                cmd = "pkexec xbps-remove -Rfy " + name.toStdString();
+            } else {
+                if (!kernel.isEmpty()) {
+                    cmd = "pkexec dkms remove -m " + name.toStdString() +
+                          " -v " + version.toStdString() +
+                          " -k " + kernel.toStdString();
+                } else {
+                    cmd = "pkexec dkms remove -m " + name.toStdString() +
+                          " -v " + version.toStdString() + " --all";
+                }
             }
         }
         appendLog("Executing: " + QString::fromStdString(cmd));
@@ -869,7 +933,12 @@ void KernelBridge::autoinstallDkms() {
 
     auto future = QtConcurrent::run([this, activeK]() {
         std::string runningK = activeK.toStdString();
-        std::string cmd = "pkexec sh -c \"dkms autoinstall -k " + runningK + " && (which dracut >/dev/null 2>&1 && dracut --force /boot/initramfs-" + runningK + ".img " + runningK + " || true)\"";
+        std::string cmd;
+        if (hasPrivilegedHelper()) {
+            cmd = "pkexec " + HELPER_PATH.toStdString() + " dkms-autoinstall " + runningK;
+        } else {
+            cmd = "pkexec sh -c \"dkms autoinstall -k " + runningK + " && (which dracut >/dev/null 2>&1 && dracut --force /boot/initramfs-" + runningK + ".img " + runningK + " || true)\"";
+        }
         appendLog("Executing dkms autoinstall: " + QString::fromStdString(cmd));
         auto result = utils::execWithOutput(cmd);
         if (!result.stdout.empty()) {
@@ -965,244 +1034,61 @@ void KernelBridge::setDefaultKernel(const QString &kernelVersion) {
     }, Qt::QueuedConnection);
 
     auto future = QtConcurrent::run([this, kernelVersion]() {
-        // Void Linux usa GRUB, así que asumimos GRUB siempre
-        std::string cmd;  // <--- DECLARACIÓN AÑADIDA
-        std::string distributor = "Void Linux";
-
-        if (QFile::exists("/etc/default/grub")) {
-            std::string distLine = utils::exec("grep '^GRUB_DISTRIBUTOR=' /etc/default/grub");
-            if (!distLine.empty()) {
-                QString distVal = QString::fromStdString(distLine).trimmed();
-                int eqIdx = distVal.indexOf('=');
-                if (eqIdx != -1) {
-                    QString raw = distVal.mid(eqIdx + 1).trimmed();
-                    raw.remove('"');
-                    raw.remove('\'');
-                    if (!raw.isEmpty())
-                        distributor = raw.toStdString();
-                }
-            }
-        }
-
-        if (distributor == "Void" || distributor == "Linux") {
-            std::string osName = utils::exec("grep '^NAME=' /etc/os-release");
-            if (!osName.empty()) {
-                QString nameVal = QString::fromStdString(osName).trimmed();
-                int eqIdx = nameVal.indexOf('=');
-                if (eqIdx != -1) {
-                    QString raw = nameVal.mid(eqIdx + 1).trimmed();
-                    raw.remove('"');
-                    raw.remove('\'');
-                    if (!raw.isEmpty())
-                        distributor = raw.toStdString();
-                }
-            }
-        }
-
-        QString grubEntry = QString::fromStdString(distributor) + ", with Linux " + kernelVersion;
-        std::string entry = grubEntry.toStdString();
-
-        // Función para escapar comillas simples de forma segura en scripts sh
-        auto shellEscapeSingleQuotes = [](const std::string &value) -> std::string {
-            std::string escaped = "'";
-            for (char c : value) {
-                if (c == '\'') escaped += "'\\''";
-                else escaped += c;
-            }
-            escaped += "'";
-            return escaped;
-        };
-
-        std::string grubEditenvBin;
-        if (utils::commandExists("grub-editenv")) {
-            grubEditenvBin = "grub-editenv";
-        } else if (utils::commandExists("grub2-editenv")) {
-            grubEditenvBin = "grub2-editenv";
-        }
-
-        std::string grubEnvPath = "/boot/grub/grubenv";
-        if (!QFile::exists(QString::fromStdString(grubEnvPath))) {
-            grubEnvPath = "/boot/grub2/grubenv";
-        }
-
-        std::string grubCfgPath = "/boot/grub/grub.cfg";
-        bool grubCfgExists = QFile::exists(QString::fromStdString(grubCfgPath));
-        if (!grubCfgExists) {
-            grubCfgPath = "/boot/grub2/grub.cfg";
-            grubCfgExists = QFile::exists(QString::fromStdString(grubCfgPath));
-        }
-
-        QString actualEntry;
-        bool foundEntry = false;
-
-        if (grubCfgExists) {
-            auto parseGrubCfg = [&](const QStringList &lines) -> bool {
-                int braceCount = 0;
-                QString currentSubmenu;
-                int submenuBraceLevel = -1;
-
-                auto extractTitle = [](const QString &l) -> QString {
-                    int firstQuote = -1;
-                    QChar quoteChar;
-                    for (int i = 0; i < l.size(); ++i) {
-                        if (l[i] == '\'' || l[i] == '"') {
-                            firstQuote = i;
-                            quoteChar = l[i];
-                            break;
-                        }
-                    }
-                    if (firstQuote != -1) {
-                        int secondQuote = l.indexOf(quoteChar, firstQuote + 1);
-                        if (secondQuote != -1) {
-                            return l.mid(firstQuote + 1, secondQuote - firstQuote - 1).trimmed();
-                        }
-                    }
-                    return "";
-                };
-
-                for (const QString &rawLine : lines) {
-                    QString line = rawLine.trimmed();
-
-                    if (line.contains("submenu ", Qt::CaseInsensitive)) {
-                        QString subTitle = extractTitle(line);
-                        if (!subTitle.isEmpty()) {
-                            currentSubmenu = subTitle;
-                            submenuBraceLevel = braceCount;
-                        }
-                    }
-
-                    if (line.contains("menuentry ", Qt::CaseInsensitive)
-                        && line.contains(kernelVersion, Qt::CaseInsensitive)
-                        && !line.contains("recovery", Qt::CaseInsensitive)) {
-                        QString entryTitle = extractTitle(line);
-                        if (!entryTitle.isEmpty()) {
-                            if (!currentSubmenu.isEmpty()) {
-                                actualEntry = currentSubmenu + ">" + entryTitle;
-                            } else {
-                                actualEntry = entryTitle;
-                            }
-                            foundEntry = true;
-                            return true;
-                        }
-                    }
-
-                    for (int i = 0; i < line.size(); ++i) {
-                        if (line[i] == '{') {
-                            braceCount++;
-                        } else if (line[i] == '}') {
-                            braceCount--;
-                            if (submenuBraceLevel != -1 && braceCount <= submenuBraceLevel) {
-                                currentSubmenu = "";
-                                submenuBraceLevel = -1;
-                            }
-                        }
-                    }
-                }
-                return false;
-            };
-
-            QStringList lines;
-            QFile cfg(QString::fromStdString(grubCfgPath));
-            bool cfgReadable = cfg.open(QIODevice::ReadOnly | QIODevice::Text);
-
-            if (cfgReadable) {
-                QTextStream in(&cfg);
-                while (!in.atEnd()) {
-                    lines.append(in.readLine());
-                }
-                cfg.close();
-                if (!lines.isEmpty()) {
-                    foundEntry = parseGrubCfg(lines);
-                }
-            }
-
-            // Solo intentar con pkexec si no se pudo leer el archivo por permisos
-            if (!cfgReadable && !foundEntry) {
-                std::string catCmd = "pkexec cat '" + grubCfgPath + "' 2>/dev/null";
-                std::string catOutput = utils::exec(catCmd);
-                if (!catOutput.empty()) {
-                    lines = QString::fromStdString(catOutput).split('\n');
-                    foundEntry = parseGrubCfg(lines);
-                }
-            }
-        }
-
-        if (!foundEntry) {
-            actualEntry = QString::fromStdString(entry);
-        }
-
-        std::string escapedActualEntry = shellEscapeSingleQuotes(actualEntry.toStdString());
-
-        // Construir la cadena de comandos
-        std::string commandChain = "export PATH=$PATH:/usr/sbin:/sbin; set -e; ";
-        commandChain += "if grep -Eq '^#?[[:space:]]*GRUB_DEFAULT=' /etc/default/grub; then ";
-        commandChain += "sed -i -E 's/^#?[[:space:]]*GRUB_DEFAULT=.*/GRUB_DEFAULT=saved/' /etc/default/grub; ";
-        commandChain += "else ";
-        commandChain += "echo 'GRUB_DEFAULT=saved' >> /etc/default/grub; ";
-        commandChain += "fi; ";
-
-        if (!grubEditenvBin.empty() && !grubEnvPath.empty()) {
-            if (!QFile::exists(QString::fromStdString(grubEnvPath))) {
-                commandChain += grubEditenvBin + " " + grubEnvPath + " create; ";
-            }
-            commandChain += grubEditenvBin + " " + grubEnvPath + " set saved_entry=" + escapedActualEntry + "; ";
-        } else if (utils::commandExists("grub-set-default")) {
-            commandChain += "grub-set-default " + escapedActualEntry + "; ";
-        } else if (utils::commandExists("grub2-set-default")) {
-            commandChain += "grub2-set-default " + escapedActualEntry + "; ";
-        } else {
-            commandChain += "echo 'No GRUB command available' >&2; false; ";
-        }
-
-        if (grubCfgExists) {
-            commandChain += "if command -v update-grub >/dev/null 2>&1; then update-grub; ";
-            commandChain += "elif command -v grub-mkconfig >/dev/null 2>&1; then grub-mkconfig -o " + grubCfgPath + "; ";
-            commandChain += "elif command -v grub2-mkconfig >/dev/null 2>&1; then grub2-mkconfig -o " + grubCfgPath + "; ";
-            commandChain += "else echo 'No grub-mkconfig or update-grub command found' >&2; false; fi ";
-        }
-
-        // Escribir en un archivo temporal para evitar problemas de escapado con pkexec sh -c
+        std::string cmd;
         std::string tempScriptPath;
-        {
+
+        if (hasPrivilegedHelper()) {
+            cmd = "pkexec " + HELPER_PATH.toStdString() + " set-default-kernel '" + kernelVersion.toStdString() + "'";
+        } else {
+            std::string kver = kernelVersion.toStdString();
+            std::string commandChain =
+                "export PATH=$PATH:/usr/sbin:/sbin; set -e; "
+                "if grep -Eq '^#?[[:space:]]*GRUB_DEFAULT=' /etc/default/grub; then "
+                "  sed -i -E 's/^#?[[:space:]]*GRUB_DEFAULT=.*/GRUB_DEFAULT=saved/' /etc/default/grub; "
+                "else "
+                "  echo 'GRUB_DEFAULT=saved' >> /etc/default/grub; "
+                "fi; "
+                "CFG=''; "
+                "for f in /boot/grub/grub.cfg /boot/grub2/grub.cfg; do [ -f \"$f\" ] && CFG=\"$f\" && break; done; "
+                "ENTRY='" + kver + "'; "
+                "if [ -n \"$CFG\" ]; then "
+                "  FOUND=$(awk -v k=\"" + kver + "\" 'BEGIN { IGNORECASE=1; cur=\"\" } "
+                "    /^[[:space:]]*submenu/ { match($0, /[\x27\x22]([^\x27\x22]+)[\x27\x22]/, a); cur=a[1] } "
+                "    /^[[:space:]]*menuentry/ && $0 ~ k && $0 !~ /recovery/ { "
+                "      match($0, /[\x27\x22]([^\x27\x22]+)[\x27\x22]/, a); "
+                "      if (cur != \"\") print cur \">\" a[1]; else print a[1]; "
+                "      exit "
+                "    }' \"$CFG\"); "
+                "  [ -n \"$FOUND\" ] && ENTRY=\"$FOUND\"; "
+                "fi; "
+                "ENV=''; "
+                "for f in /boot/grub/grubenv /boot/grub2/grubenv; do [ -f \"$f\" ] && ENV=\"$f\" && break; done; "
+                "EDIT=''; "
+                "for c in grub-editenv grub2-editenv; do which \"$c\" >/dev/null 2>&1 && EDIT=\"$c\" && break; done; "
+                "if [ -n \"$EDIT\" ]; then "
+                "  if [ -n \"$ENV\" ]; then "
+                "    \"$EDIT\" \"$ENV\" set saved_entry=\"$ENTRY\"; "
+                "  else "
+                "    \"$EDIT\" - set saved_entry=\"$ENTRY\"; "
+                "  fi; "
+                "fi; "
+                "echo \"Default boot kernel set to: $ENTRY\"";
+
             char templatePath[] = "/tmp/com.neko.kernelmanager.XXXXXX";
             int fd = mkstemp(templatePath);
             if (fd != -1) {
                 tempScriptPath = templatePath;
-                std::string content = commandChain;
-                ssize_t written = write(fd, content.c_str(), content.size());
-                (void)written;
-                (void)fchmod(fd, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+                write(fd, commandChain.c_str(), commandChain.size());
+                fchmod(fd, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
                 close(fd);
+                cmd = "pkexec sh '" + tempScriptPath + "'";
+            } else {
+                cmd = "pkexec sh -c \"" + commandChain + "\"";
             }
         }
 
         if (!tempScriptPath.empty()) {
-            cmd = "pkexec sh " + shellEscapeSingleQuotes(tempScriptPath);
-        } else {
-            // Si falla la creación del temporal, usamos un fallback con doble escapado
-            auto shellEscapeDouble = [](const std::string &value) {
-                std::string escaped = "\"";
-                for (char c : value) {
-                    if (c == '"' || c == '\\' || c == '$' || c == '`')
-                        escaped += "\\";
-                    escaped += c;
-                }
-                escaped += "\"";
-                return escaped;
-            };
-
-            std::string doubleEscaped = shellEscapeDouble(actualEntry.toStdString());
-            size_t pos = commandChain.find(escapedActualEntry);
-            while (pos != std::string::npos) {
-                commandChain.replace(pos, escapedActualEntry.length(), doubleEscaped);
-                pos = commandChain.find(escapedActualEntry, pos + doubleEscaped.length());
-            }
-
-            cmd = "pkexec sh -c " + shellEscapeDouble(commandChain);
-        }
-
-        if (!tempScriptPath.empty()) {
-            cmd += "; rm -f " + shellEscapeSingleQuotes(tempScriptPath);
+            cmd += "; rm -f '" + tempScriptPath + "'";
         }
 
         appendLog("Executing GRUB update: " + QString::fromStdString(cmd));
