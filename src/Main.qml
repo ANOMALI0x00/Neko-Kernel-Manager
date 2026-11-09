@@ -72,6 +72,7 @@ ApplicationWindow {
                     || (kernel.version || "").toLowerCase().indexOf(query) !== -1
                     || (kernel.category || "").toLowerCase().indexOf(query) !== -1
                     || (kernel.type || "").toLowerCase().indexOf(query) !== -1
+                    || (kernel.repo || "").toLowerCase().indexOf(query) !== -1
             })
         }
         return result
@@ -1009,10 +1010,11 @@ ApplicationWindow {
                                     Text {
                                         Layout.fillWidth: true
                                         text: window.selectedKernel
-                                              ? qsTr("Version %1 · %2 · %3")
+                                              ? qsTr("Version %1 · %2 · %3 · %4")
                                                 .arg(window.selectedKernel.version || "—")
                                                 .arg(window.selectedKernel.category || window.selectedKernel.type || qsTr("Unclassified"))
                                                 .arg(window.selectedKernel.size || qsTr("Unknown size"))
+                                                .arg(window.selectedKernel.repo || qsTr("System"))
                                               : qsTr("Select a kernel from the list to manage it.")
                                         color: themeColors.muted
                                         font.pixelSize: 12
@@ -1025,10 +1027,10 @@ ApplicationWindow {
                                         text: window.kernelIsRunning(window.selectedKernel)
                                               ? qsTr("This kernel is currently running and cannot be removed.")
                                               : window.kernelIsDefault(window.selectedKernel)
-                                                ? qsTr("This kernel is selected as the default boot entry.")
+                                                ? qsTr("This kernel is selected as default boot entry (Repo: %1)").arg(window.selectedKernel.repo || qsTr("System"))
                                                 : window.selectedKernel && window.selectedKernel.installed
-                                                  ? qsTr("Installed on %1").arg(window.selectedKernel.installDate || qsTr("an unknown date"))
-                                                  : qsTr("Available from configured Void repositories.")
+                                                  ? qsTr("Installed on %1 · Repo: %2").arg(window.selectedKernel.installDate || qsTr("an unknown date")).arg(window.selectedKernel.repo || qsTr("System"))
+                                                  : qsTr("Available from repository: %1").arg(window.selectedKernel ? (window.selectedKernel.repo || qsTr("System")) : qsTr("Void repositories"))
                                         color: window.kernelIsRunning(window.selectedKernel) ? themeColors.warning
                                              : window.kernelIsDefault(window.selectedKernel) ? themeColors.selected
                                              : themeColors.muted
@@ -1057,7 +1059,7 @@ ApplicationWindow {
 
                                     GtkButton {
                                         visible: window.selectedKernel && window.selectedKernel.installed && !window.kernelIsRunning(window.selectedKernel)
-                                        enabled: visible && !bridge.busy
+                                        enabled: visible && !bridge.busy && (window.installedKernelCount > 1 || (window.selectedKernel && window.selectedKernel.type === "vkpurge"))
                                         destructive: true
                                         text: qsTr("Remove")
                                         onClicked: {
@@ -1234,21 +1236,60 @@ ApplicationWindow {
     // Purge Dialog
     Dialog {
         id: purgeDialog
+        property string vkList: ""
         x: Math.round((window.width - width) / 2)
         y: Math.round((window.height - height) / 2)
-        width: Math.min(460, window.width - 48)
+        width: Math.min(500, window.width - 48)
         modal: true
         focus: true
-        title: qsTr("Purge old kernels")
+        title: qsTr("Purge old kernels (vkpurge)")
         standardButtons: Dialog.Cancel | Dialog.Ok
+        onAboutToShow: {
+            vkList = bridge.getVkpurgeList()
+        }
         onAccepted: bridge.vkpurge()
 
-        Text {
+        ColumnLayout {
             width: parent.width
-            text: qsTr("Neko will run 'vkpurge rm all' to remove obsolete kernel packages and reclaim disk space.\n\nThe active kernel will remain untouched.")
-            color: themeColors.text
-            font.pixelSize: 13
-            wrapMode: Text.WordWrap
+            spacing: 12
+
+            Text {
+                Layout.fillWidth: true
+                text: purgeDialog.vkList.length > 0
+                      ? qsTr("Neko will run 'vkpurge rm all' to remove obsolete kernel files and reclaim disk space.\n\nThe following obsolete kernel releases were detected and will be purged:")
+                      : qsTr("Neko will run 'vkpurge rm all' to clean obsolete kernel files.\nNo unreferenced kernels are currently reported by vkpurge.")
+                color: themeColors.text
+                font.pixelSize: 13
+                wrapMode: Text.WordWrap
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(90, Math.max(40, purgeListText.contentHeight + 16))
+                visible: purgeDialog.vkList.length > 0
+                color: themeColors.inputBg
+                border.color: themeColors.inputBorder
+                radius: 4
+
+                ScrollView {
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    Text {
+                        id: purgeListText
+                        text: purgeDialog.vkList
+                        color: themeColors.warning
+                        font.family: "Monospace"
+                        font.pixelSize: 12
+                    }
+                }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: qsTr("The currently active and installed kernels will remain safe and untouched.")
+                color: themeColors.muted
+                font.pixelSize: 11
+            }
         }
         background: Rectangle {
             color: themeColors.popover

@@ -74,6 +74,7 @@ QVariantList KernelBridge::getKernels() {
         map["installed"] = k.is_installed();
         map["hasFiles"] = k.has_files();
         map["type"] = QString::fromStdString(k.type());
+        map["repo"] = QString::fromStdString(k.repo());
         list.append(map);
     }
     return list;
@@ -84,6 +85,20 @@ void KernelBridge::updateKernels() {
     setProgress(15);
     setStatusMessage("Scanning installed & available kernels...", false);
     appendLog("Scanning system for installed and available kernels...");
+
+    // Registrar los repositorios del sistema activos
+    if (utils::commandExists("xbps-query")) {
+        std::string reposOut = utils::exec("xbps-query -L");
+        if (!reposOut.empty()) {
+            appendLog("Active system repositories configured in XBPS:");
+            for (const auto &line : utils::split(reposOut, '\n')) {
+                std::string t = utils::trim(line);
+                if (!t.empty()) {
+                    appendLog("  • " + QString::fromStdString(t));
+                }
+            }
+        }
+    }
 
     auto future = QtConcurrent::run([this]() {
         QMetaObject::invokeMethod(this, [this]() { setProgress(40); });
@@ -97,17 +112,14 @@ void KernelBridge::updateKernels() {
             appendLog(QString("Kernel scan completed. Found %1 kernel entries:").arg(newList.size()));
             for (const auto &var : newList) {
                 QVariantMap m = var.toMap();
-                appendLog(QString("  • %1 (%2) [Type: %3, Installed: %4]")
+                appendLog(QString("  • %1 (%2) [Type: %3, Repo: %4, Installed: %5]")
                             .arg(m["name"].toString())
                             .arg(m["version"].toString())
                             .arg(m["type"].toString())
+                            .arg(m["repo"].toString())
                             .arg(m["installed"].toBool() ? "Yes" : "No"));
             }
         });
-
-        // --- REPOSITORY CREATION REMOVED ---
-        // The custom Neko repository is already part of the system (Neko Void).
-        // The application must not create or modify any repository files.
 
         QMetaObject::invokeMethod(this, [this, newList]() {
             m_kernelsCache = newList;
@@ -224,11 +236,16 @@ void KernelBridge::installKernel(const QString &name) {
 // removeKernel – CORREGIDA con detección de error por dependencias
 // ----------------------------------------------------------------------------
 void KernelBridge::removeKernel(const QString &name, const QString &type, const QString &version) {
-    bool isManual = (type.toLower() == "manual");
+    bool isVkpurge = (type.toLower() == "vkpurge");
+    bool isManual = (type.toLower() == "manual") || isVkpurge;
     QString runningVer = activeKernelVersion().trimmed();
     QString targetVersion = version;
-    if (targetVersion.isEmpty() && isManual && name.startsWith("linux-manual-")) {
-        targetVersion = name.mid(QString("linux-manual-").size());
+    if (targetVersion.isEmpty() && isManual) {
+        if (name.startsWith("linux-manual-")) {
+            targetVersion = name.mid(QString("linux-manual-").size());
+        } else if (name.startsWith("linux-orphan-")) {
+            targetVersion = name.mid(QString("linux-orphan-").size());
+        }
     }
     if (targetVersion.isEmpty()) {
         targetVersion = name;
@@ -257,20 +274,33 @@ void KernelBridge::removeKernel(const QString &name, const QString &type, const 
         }
     }
 
+    // Seguridad: no permitir eliminar el único kernel instalado
+    int installedCount = 0;
+    for (const auto &var : m_kernelsCache) {
+        if (var.toMap()["installed"].toBool()) {
+            installedCount++;
+        }
+    }
+    if (installedCount <= 1 && !isVkpurge) {
+        appendLog("SECURITY ERROR: Cannot remove the only installed kernel. Install another kernel first to ensure your system remains bootable.");
+        setStatusMessage("Cannot remove the only installed kernel! Install another kernel first.", true);
+        return;
+    }
+
     if (!isManual) {
         std::string pkgName = name.toStdString();
         if (!utils::packageInstalled(pkgName)) {
-            appendLog("WARNING: Package " + name + " is not actually installed. Switching to manual removal of files.");
+            appendLog("WARNING: Package " + name + " is not actually installed in XBPS. Switching to manual removal of files.");
             isManual = true;
             setStatusMessage("Package not installed; removing files manually.", false);
         }
     }
 
-    appendLog("Starting removal of kernel: " + name + " (Type: " + QString(isManual ? "Manual /boot" : "XBPS package") + ")");
+    appendLog("Starting removal of kernel: " + name + " (Type: " + QString(isVkpurge ? "vkpurge orphan" : isManual ? "Manual /boot" : "XBPS package") + ")");
     setBusy(true);
     setProgress(10);
 
-    auto future = QtConcurrent::run([this, name, type, targetVersion, isManual]() {
+    auto future = QtConcurrent::run([this, name, type, targetVersion, isManual, isVkpurge]() {
         std::string cmd;
         std::string tempScriptPath;
         bool success = false;
@@ -313,49 +343,58 @@ void KernelBridge::removeKernel(const QString &name, const QString &type, const 
             return ok;
         };
 
-        if (isManual) {
-            // Ya es manual, borrar archivos directamente
+        if (isVkpurge) {
+            std::string ver = targetVersion.toStdString();
+            cmd = "pkexec sh -c \"vkpurge rm " + ver + " && (which grub-mkconfig >/dev/null 2>&1 && grub-mkconfig -o /boot/grub/grub.cfg || true)\"";
+            appendLog("Executing vkpurge: " + QString::fromStdString(cmd));
+            auto result = utils::execWithOutput(cmd);
+            if (!result.stdout.empty()) appendLog(QString::fromStdString(result.stdout));
+            if (!result.stderr.empty()) appendLog(QString::fromStdString(result.stderr));
+            success = (result.exitCode == 0);
+            if (!success) {
+                appendLog("vkpurge rm failed or version not indexed; cleaning files manually...");
+                success = removeFilesManually(ver);
+            }
+        } else if (isManual) {
             std::string ver = targetVersion.toStdString();
             success = removeFilesManually(ver);
         } else {
-            // Intentar eliminar con xbps-remove
+            // Paquete XBPS
             std::string pkgName = name.toStdString();
-            cmd = "pkexec sh -c \"xbps-remove -Rfy " + pkgName + " && (which grub-mkconfig >/dev/null 2>&1 && grub-mkconfig -o /boot/grub/grub.cfg || true)\"";
+            std::string toRemove = pkgName;
+            std::string headersPkg = pkgName + "-headers";
+            if (utils::packageInstalled(headersPkg)) {
+                toRemove += " " + headersPkg;
+                appendLog("Kernel headers package also detected (" + QString::fromStdString(headersPkg) + ") and included in removal.");
+            }
+
+            cmd = "pkexec sh -c \"xbps-remove -Rfy " + toRemove + " && (which grub-mkconfig >/dev/null 2>&1 && grub-mkconfig -o /boot/grub/grub.cfg || true)\"";
             appendLog("Executing xbps-remove: " + QString::fromStdString(cmd));
             auto result = utils::execWithOutput(cmd);
-            if (!result.stdout.empty()) {
-                appendLog(QString::fromStdString(result.stdout));
-            }
-            if (!result.stderr.empty()) {
-                appendLog(QString::fromStdString(result.stderr));
-            }
+            if (!result.stdout.empty()) appendLog(QString::fromStdString(result.stdout));
+            if (!result.stderr.empty()) appendLog(QString::fromStdString(result.stderr));
             success = (result.exitCode == 0);
 
-            // Si falló, comprobar si fue por dependencias
+            // Si falló por dependencias de paquete meta (p. ej. linux o base-system), reintentar con -RFy (force-revdeps)
             if (!success) {
                 std::string output = result.stdout + result.stderr;
                 if (output.find("breaks installed pkg") != std::string::npos ||
                     output.find("dependency") != std::string::npos ||
                     output.find("Transaction aborted") != std::string::npos) {
-                    dependencyError = true;
-                    appendLog("Kernel removal failed due to package dependencies. The package will remain installed, but its files will be removed.");
-                    setStatusMessage("Dependency conflict: removing files only, keeping package.", false);
-                    // Borrar archivos manualmente
-                    std::string ver = targetVersion.toStdString();
-                    success = removeFilesManually(ver);
+                    appendLog("Metapackage reverse dependency conflict detected. Re-attempting removal with XBPS --force-revdeps (-RFy)...");
+                    cmd = "pkexec sh -c \"xbps-remove -RFy " + toRemove + " && (which grub-mkconfig >/dev/null 2>&1 && grub-mkconfig -o /boot/grub/grub.cfg || true)\"";
+                    auto resForce = utils::execWithOutput(cmd);
+                    if (!resForce.stdout.empty()) appendLog(QString::fromStdString(resForce.stdout));
+                    if (!resForce.stderr.empty()) appendLog(QString::fromStdString(resForce.stderr));
+                    success = (resForce.exitCode == 0);
                 }
             }
         }
 
-        QMetaObject::invokeMethod(this, [this, success, name, dependencyError]() {
+        QMetaObject::invokeMethod(this, [this, success, name]() {
             if (success) {
-                if (dependencyError) {
-                    appendLog("Kernel files removed successfully. Package " + name + " remains installed (without files).");
-                    setStatusMessage("Kernel files removed (package kept due to dependencies)", false);
-                } else {
-                    appendLog("Kernel removal completed successfully: " + name);
-                    setStatusMessage("Kernel removed successfully", false);
-                }
+                appendLog("Kernel removal completed successfully: " + name);
+                setStatusMessage("Kernel removed successfully", false);
             } else {
                 appendLog("ERROR: Kernel removal failed for " + name);
                 setStatusMessage("Removal failed", true);
@@ -367,6 +406,12 @@ void KernelBridge::removeKernel(const QString &name, const QString &type, const 
         });
     });
     (void)future;
+}
+
+QString KernelBridge::getVkpurgeList() {
+    if (!utils::commandExists("vkpurge")) return "";
+    std::string out = utils::exec("vkpurge list");
+    return QString::fromStdString(out).trimmed();
 }
 
 void KernelBridge::vkpurge() {

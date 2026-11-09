@@ -19,6 +19,7 @@ namespace utils {
     void runInTerminal(const std::string& cmd);
     std::vector<std::string> split(const std::string& s, char delim);
     std::string join(const std::vector<std::string>& v, const std::string& delim);
+    std::string trim(const std::string &s);
     bool commandExists(const std::string &cmd);
     bool fileExists(const std::string &path);   // NUEVA: comprueba si un archivo existe
     bool dirExists(const std::string &path);

@@ -26,6 +26,7 @@ public:
     std::string installDate() const;
     std::string name() const { return m_pkg.name; }
     std::string type() const { return m_pkg.type; }
+    std::string repo() const { return m_pkg.repo; }
     void set_installed(bool inst) { m_pkg.is_installed = inst; }
     void set_has_files(bool has) { m_pkg.has_files = has; } // NUEVO: setter para has_files
 

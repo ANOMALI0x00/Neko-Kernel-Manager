@@ -37,6 +37,7 @@ public:
     Q_INVOKABLE void removeKernel(const QString &name, const QString &type = "", const QString &version = "");
 
     Q_INVOKABLE void vkpurge();
+    Q_INVOKABLE QString getVkpurgeList();
 
     // DKMS Management
     Q_INVOKABLE void updateDkmsModules();
