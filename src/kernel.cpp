@@ -32,14 +32,15 @@ bool Kernel::remove() {
 }
 
 std::string Kernel::category() const {
-    if (m_pkg.type == "manual" || 
-        m_pkg.name.find("linux-neko") != std::string::npos ||
-        m_pkg.name.find("linux-cachy-void") != std::string::npos) return "Custom";
     if (m_pkg.name.find("lts") != std::string::npos) return "Longterm";
     if (m_pkg.name.find("rt") != std::string::npos) return "Realtime";
     if (m_pkg.name.find("zen") != std::string::npos) return "Zen";
     if (m_pkg.name.find("hardened") != std::string::npos) return "Hardened";
     if (m_pkg.name.find("mainline") != std::string::npos) return "Mainline";
+    if (m_pkg.type == "manual" || 
+        m_pkg.name.find("linux-neko") != std::string::npos ||
+        m_pkg.name.find("kernel-neko") != std::string::npos ||
+        m_pkg.name.find("linux-cachy-void") != std::string::npos) return "Custom";
     return "Stable";
 }
 
@@ -82,13 +83,16 @@ std::vector<Kernel> Kernel::getKernels() {
     std::map<std::string, bool> manualCandidates;     // version -> tiene vmlinuz en /boot
 
     auto isKernelPackage = [](const std::string &name) -> bool {
-        if (name.rfind("linux", 0) != 0) return false;
+        bool isLinux = (name.rfind("linux", 0) == 0);
+        bool isKernelNeko = (name.rfind("kernel-neko", 0) == 0);
+        if (!isLinux && !isKernelNeko) return false;
 
         static const std::vector<std::string> excludedNames = {
             "linux-api-headers", "linux-firmware", "linux-libre", "linux-base",
             "linux-user", "linux-atm", "linux-utils", "linux-gpib", "linux-pam",
             "linux-container", "linux-kmod", "linux-driver-management",
-            "linux-driver-management-32bit", "linux-vt-setcolors", "linux-wifi-hotspot"
+            "linux-driver-management-32bit", "linux-vt-setcolors", "linux-wifi-hotspot",
+            "kernel-libc-headers"
         };
         for (const auto &excluded : excludedNames) {
             if (name == excluded) return false;
@@ -110,7 +114,7 @@ std::vector<Kernel> Kernel::getKernels() {
             if (name == allowed) return true;
         }
 
-        if (name.rfind("linux-neko", 0) == 0 || name.rfind("linux-cachy", 0) == 0) return true;
+        if (name.rfind("linux-neko", 0) == 0 || name.rfind("kernel-neko", 0) == 0 || name.rfind("linux-cachy", 0) == 0) return true;
         if (name.rfind("linux-manual-", 0) == 0) return true;
 
         if (name.size() > 5 && std::isdigit(name[5])) return true;
@@ -247,6 +251,7 @@ std::vector<Kernel> Kernel::getKernels() {
         std::string repoOutput;
         repoOutput += utils::exec("xbps-query -Rs linux");
         repoOutput += "\n" + utils::exec("xbps-query -Rs linux-neko");
+        repoOutput += "\n" + utils::exec("xbps-query -Rs kernel-neko");
         repoOutput += "\n" + utils::exec("xbps-query -Rs linux-cachy-void");
         std::vector<std::string> repoLines = utils::split(repoOutput, '\n');
 
@@ -300,7 +305,8 @@ std::vector<Kernel> Kernel::getKernels() {
     }
 
     static const std::vector<std::string> priorityOrder = {
-        "linux-neko-rt", "linux-neko-zen", "linux-cachy-void", "linux-mainline", "linux-lts"
+        "kernel-neko", "linux-neko-rt", "linux-neko-zen", "linux-neko-lts", "linux-neko",
+        "linux-cachy-void", "linux-mainline", "linux-lts"
     };
     auto priority = [](const std::string &name) -> int {
         for (size_t i = 0; i < priorityOrder.size(); ++i) {

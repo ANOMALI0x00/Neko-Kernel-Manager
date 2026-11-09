@@ -82,22 +82,39 @@ ApplicationWindow {
         return count
     }
 
+    function versionsMatch(a, b) {
+        if (!a || !b) return false
+        if (a === b) return true
+        function checkPrefix(full, sub) {
+            if (!full.startsWith(sub)) return false
+            if (full.length === sub.length) return true
+            var next = full.charAt(sub.length)
+            return !/[0-9a-zA-Z]/.test(next)
+        }
+        return checkPrefix(a, b) || checkPrefix(b, a)
+    }
+
     function kernelIsRunning(kernel) {
-        if (!kernel || !kernel.installed || bridge.activeKernelVersion === "")
+        if (!kernel || !kernel.installed || !bridge.activeKernelVersion)
             return false
-        return bridge.activeKernelVersion === kernel.version
-            || bridge.activeKernelVersion.indexOf(kernel.version) !== -1
-            || kernel.version.indexOf(bridge.activeKernelVersion) !== -1
-            || ((kernel.name || "").indexOf("manual") !== -1
-                && bridge.activeKernelVersion.indexOf(kernel.version) !== -1)
+        var active = bridge.activeKernelVersion.trim()
+        if (versionsMatch(active, kernel.version))
+            return true
+        var cleanName = (kernel.name || "").replace(/^(linux-?|kernel-)/, "")
+        if (cleanName.length > 0 && versionsMatch(active, cleanName))
+            return true
+        return false
     }
 
     function kernelIsDefault(kernel) {
-        if (!kernel || !kernel.installed || bridge.defaultKernel === "")
+        if (!kernel || !kernel.installed || !bridge.defaultKernel)
             return false
-        return bridge.defaultKernel === kernel.version
-            || bridge.defaultKernel.indexOf(kernel.version) !== -1
-            || bridge.defaultKernel.indexOf(kernel.name) !== -1
+        var def = bridge.defaultKernel.trim()
+        if (def === kernel.name || versionsMatch(def, kernel.version))
+            return true
+        if (def.indexOf(kernel.version) !== -1 || def.indexOf(kernel.name) !== -1)
+            return true
+        return false
     }
 
     function selectFirstVisibleKernel(ensureVisible) {
@@ -1139,7 +1156,17 @@ ApplicationWindow {
 
         ColumnLayout {
             width: parent.width
-            spacing: 10
+            spacing: 12
+
+            Image {
+                source: "qrc:/neko/Data/logo.png"
+                Layout.preferredWidth: 64
+                Layout.preferredHeight: 64
+                sourceSize: Qt.size(128, 128)
+                smooth: true
+                Layout.alignment: Qt.AlignHCenter
+            }
+
             Text { Layout.fillWidth: true; text: qsTr("Neko Kernel Manager"); color: themeColors.text; font.pixelSize: 18; font.weight: Font.DemiBold; horizontalAlignment: Text.AlignHCenter }
             Text {
                 Layout.fillWidth: true
@@ -1163,7 +1190,8 @@ ApplicationWindow {
         defaultSuffix: "txt"
         onAccepted: {
             if (fileDialog.file.toString().length > 0) {
-                var filePath = fileDialog.file.toString().replace("file://", "")
+                var rawPath = fileDialog.file.toString()
+                var filePath = decodeURIComponent(rawPath.replace(/^file:\/\//, ""))
                 bridge.exportLogs(filePath)
             }
         }

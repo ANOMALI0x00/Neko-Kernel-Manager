@@ -41,27 +41,14 @@ bool runCommand(const std::string& cmd) {
     return system(cmd.c_str()) == 0;
 }
 
-static bool canAuthenticate(const std::string &privilegeCmd) {
-    std::string testCmd = privilegeCmd + " true 2>/dev/null";
-    int ret = system(testCmd.c_str());
-    return (ret == 0);
-}
-
 static std::string detectPrivilegeSystem() {
     if (system("command -v pkexec >/dev/null 2>&1") == 0) {
-        if (canAuthenticate("pkexec")) {
-            return "pkexec";
-        }
+        return "pkexec";
     }
     if (system("command -v doas >/dev/null 2>&1") == 0) {
-        if (canAuthenticate("doas")) {
-            return "doas";
-        }
+        return "doas";
     }
     if (system("command -v sudo >/dev/null 2>&1") == 0) {
-        if (canAuthenticate("sudo")) {
-            return "sudo";
-        }
         return "sudo";
     }
     return "";
@@ -135,7 +122,12 @@ bool fileOwnedByPackage(const std::string &filePath) {
     process.setProcessChannelMode(QProcess::MergedChannels);
     process.start();
     process.waitForFinished(-1);
-    return process.exitCode() == 0;
+    if (process.exitCode() != 0) return false;
+    QString out = process.readAllStandardOutput().trimmed();
+    if (out.isEmpty() || out.contains("not owned") || out.contains("No such file")) {
+        return false;
+    }
+    return true;
 }
 
 std::vector<std::string> split(const std::string &s, char delim) {
@@ -175,20 +167,12 @@ bool dirExists(const std::string &path) {
 
 bool packageExists(const std::string &pkgName) {
     if (!commandExists("xbps-query")) return false;
-    return QProcess::execute("xbps-query", {"-Rs", QString::fromStdString(pkgName)}) == 0;
+    return QProcess::execute("xbps-query", {"-R", "-p", "pkgver", QString::fromStdString(pkgName)}) == 0;
 }
 
 bool packageInstalled(const std::string &pkgName) {
     if (!commandExists("xbps-query")) return false;
-    QProcess process;
-    process.setProgram("xbps-query");
-    process.setArguments({"-l"});
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start();
-    process.waitForFinished(-1);
-    if (process.exitCode() != 0) return false;
-    QString output = process.readAllStandardOutput();
-    return output.contains(QString::fromStdString(pkgName));
+    return QProcess::execute("xbps-query", {"-p", "pkgver", QString::fromStdString(pkgName)}) == 0;
 }
 
 std::string getRealHome() {

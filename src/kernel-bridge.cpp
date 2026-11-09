@@ -18,7 +18,7 @@ KernelBridge::KernelBridge(QObject *parent) : QObject(parent), m_verbose(false) 
 }
 
 KernelBridge::~KernelBridge() {
-    int res = system("rm -rf /tmp/neko-kernel-*");
+    int res = system("rm -rf /tmp/neko-kernel-* /tmp/com.neko.kernelmanager.*");
     (void)res;
 }
 
@@ -158,9 +158,14 @@ void KernelBridge::exportLogs(const QString &filePath) {
         return;
     }
 
-    QFile file(filePath);
+    QString cleanPath = filePath;
+    if (cleanPath.startsWith("file://")) {
+        cleanPath = QUrl(cleanPath).toLocalFile();
+    }
+
+    QFile file(cleanPath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        appendLog("ERROR: Could not open file for writing: " + filePath);
+        appendLog("ERROR: Could not open file for writing: " + cleanPath);
         setStatusMessage("Failed to export logs", true);
         return;
     }
@@ -173,8 +178,8 @@ void KernelBridge::exportLogs(const QString &filePath) {
     out << plainLogs;
     file.close();
 
-    appendLog("Logs exported successfully to: " + filePath);
-    setStatusMessage("Logs exported to " + filePath, false);
+    appendLog("Logs exported successfully to: " + cleanPath);
+    setStatusMessage("Logs exported to " + cleanPath, false);
 }
 
 void KernelBridge::installKernel(const QString &name) {
@@ -230,8 +235,22 @@ void KernelBridge::removeKernel(const QString &name, const QString &type, const 
     }
 
     if (!runningVer.isEmpty()) {
-        QString verToCheck = isManual ? targetVersion : name;
-        if (verToCheck.contains(runningVer) || runningVer.contains(verToCheck) || name.contains(runningVer)) {
+        auto matchesBoundary = [](const QString &full, const QString &sub) {
+            if (!full.startsWith(sub)) return false;
+            if (full.length() == sub.length()) return true;
+            QChar next = full.at(sub.length());
+            return !next.isLetterOrNumber();
+        };
+        auto isMatch = [&](const QString &a, const QString &b) {
+            if (a.isEmpty() || b.isEmpty()) return false;
+            if (a == b) return true;
+            return matchesBoundary(a, b) || matchesBoundary(b, a);
+        };
+
+        QString cleanName = name;
+        cleanName.remove(QRegularExpression("^(linux-?|kernel-)"));
+
+        if (isMatch(runningVer, targetVersion) || isMatch(runningVer, cleanName)) {
             appendLog("SECURITY WARNING: Attempted to uninstall currently running kernel (" + runningVer + "). Operation aborted. Reboot into a different kernel before removing it.");
             setStatusMessage("Cannot remove currently running kernel! Reboot into another kernel first.", true);
             return;
@@ -475,16 +494,8 @@ QVariantList KernelBridge::getDkmsModulesInternal() {
 
     // 2. Query installed and available DKMS packages from XBPS repositories in Void Linux
     if (utils::commandExists("xbps-query")) {
-        std::string installedXbps = utils::exec("xbps-query -l | grep 'dkms' | awk '{print $2}'");
-        std::string availableXbps = utils::exec("xbps-query -Rs 'dkms' | awk '{print $2}'");
-        std::vector<std::string> xbpsLines;
-
-        for (const auto &line : utils::split(installedXbps, '\n')) {
-            if (!line.empty()) xbpsLines.push_back("ii " + line);
-        }
-        for (const auto &line : utils::split(availableXbps, '\n')) {
-            if (!line.empty()) xbpsLines.push_back(line);
-        }
+        std::string repoXbps = utils::exec("xbps-query -Rs 'dkms'");
+        std::vector<std::string> xbpsLines = utils::split(repoXbps, '\n');
 
         std::set<std::string> processedPkgs;
 
@@ -494,10 +505,7 @@ QVariantList KernelBridge::getDkmsModulesInternal() {
             std::string status;
             std::string fullPkg;
             iss >> status >> fullPkg;
-            if (fullPkg.empty()) {
-                fullPkg = status;
-                status.clear();
-            }
+            if (fullPkg.empty()) continue;
 
             std::string pkgName;
             std::string pkgVersion;
@@ -507,7 +515,7 @@ QVariantList KernelBridge::getDkmsModulesInternal() {
             if (processedPkgs.count(pkgName)) continue;
             processedPkgs.insert(pkgName);
 
-            bool isInstalled = (status == "[*]" || status == "ii");
+            bool isInstalled = (status == "[*]") || utils::packageInstalled(pkgName);
 
             QString modName = QString::fromStdString(pkgName);
             QString normalizedPackage = normalizeDkmsName(modName);
