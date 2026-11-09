@@ -1205,26 +1205,64 @@ ApplicationWindow {
         property var kernelData: null
         x: Math.round((window.width - width) / 2)
         y: Math.round((window.height - height) / 2)
-        width: Math.min(460, window.width - 48)
+        width: Math.min(480, window.width - 48)
         modal: true
         focus: true
         title: qsTr("Remove kernel")
-        standardButtons: Dialog.Cancel | Dialog.Ok
-        onAccepted: {
-            if (kernelData)
-                bridge.removeKernel(kernelData.name, kernelData.type || "", kernelData.version || "")
+        onClosed: kernelData = null
+
+        contentItem: ColumnLayout {
+            spacing: 14
+
+            Text {
+                Layout.fillWidth: true
+                text: {
+                    if (!removeDialog.kernelData) return ""
+                    var k = removeDialog.kernelData
+                    if (k.type === "vkpurge") {
+                        return qsTr("Are you sure you want to purge obsolete kernel files for %1?\n\nThis kernel is an unreferenced leftover tracked by vkpurge. It will be cleanly removed from /boot.")
+                            .arg(k.version)
+                    }
+                    return qsTr("Are you sure you want to remove %1 (%2)?\n\nThe currently running kernel is protected, but this action cannot be undone.")
+                        .arg(k.name).arg(k.version)
+                }
+                color: themeColors.text
+                font.pixelSize: 13
+                wrapMode: Text.WordWrap
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                height: 1
+                color: themeColors.border
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+
+                Item { Layout.fillWidth: true }
+
+                GtkButton {
+                    text: qsTr("Cancel")
+                    onClicked: removeDialog.close()
+                }
+
+                GtkButton {
+                    text: qsTr("Remove")
+                    destructive: true
+                    enabled: !bridge.busy
+                    onClicked: {
+                        var k = removeDialog.kernelData
+                        removeDialog.close()
+                        if (k) {
+                            bridge.removeKernel(k.name, k.type || "", k.version || "")
+                        }
+                    }
+                }
+            }
         }
 
-        Text {
-            width: parent.width
-            text: removeDialog.kernelData
-                  ? qsTr("Are you sure you want to remove %1 (%2)?\n\nThe currently running kernel is protected, but this action cannot be undone.")
-                    .arg(removeDialog.kernelData.name).arg(removeDialog.kernelData.version)
-                  : ""
-            color: themeColors.text
-            font.pixelSize: 13
-            wrapMode: Text.WordWrap
-        }
         background: Rectangle {
             color: themeColors.popover
             border.color: themeColors.strongBorder
@@ -1243,15 +1281,12 @@ ApplicationWindow {
         modal: true
         focus: true
         title: qsTr("Purge old kernels (vkpurge)")
-        standardButtons: Dialog.Cancel | Dialog.Ok
         onAboutToShow: {
             vkList = bridge.getVkpurgeList()
         }
-        onAccepted: bridge.vkpurge()
 
-        ColumnLayout {
-            width: parent.width
-            spacing: 12
+        contentItem: ColumnLayout {
+            spacing: 14
 
             Text {
                 Layout.fillWidth: true
@@ -1290,7 +1325,36 @@ ApplicationWindow {
                 color: themeColors.muted
                 font.pixelSize: 11
             }
+
+            Rectangle {
+                Layout.fillWidth: true
+                height: 1
+                color: themeColors.border
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+
+                Item { Layout.fillWidth: true }
+
+                GtkButton {
+                    text: qsTr("Cancel")
+                    onClicked: purgeDialog.close()
+                }
+
+                GtkButton {
+                    text: qsTr("Purge")
+                    destructive: true
+                    enabled: !bridge.busy
+                    onClicked: {
+                        purgeDialog.close()
+                        bridge.vkpurge()
+                    }
+                }
+            }
         }
+
         background: Rectangle {
             color: themeColors.popover
             border.color: themeColors.strongBorder
