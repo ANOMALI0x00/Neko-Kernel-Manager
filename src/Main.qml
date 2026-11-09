@@ -1058,6 +1058,13 @@ ApplicationWindow {
                                     }
 
                                     GtkButton {
+                                        visible: window.selectedKernel && window.selectedKernel.installed
+                                        enabled: visible && !bridge.busy
+                                        text: qsTr("Reconfigure")
+                                        onClicked: bridge.reconfigureKernel(window.selectedKernel.name, window.selectedKernel.type || "", window.selectedKernel.version || "")
+                                    }
+
+                                    GtkButton {
                                         visible: window.selectedKernel && window.selectedKernel.installed && !window.kernelIsRunning(window.selectedKernel)
                                         enabled: visible && !bridge.busy && (window.installedKernelCount > 1 || (window.selectedKernel && window.selectedKernel.type === "vkpurge"))
                                         destructive: true
@@ -1526,9 +1533,9 @@ ApplicationWindow {
                             }
 
                             Text {
-                                Layout.preferredWidth: 90
+                                Layout.preferredWidth: 110
                                 text: modelData.status || qsTr("unknown")
-                                color: modelData.status === "installed" ? themeColors.success
+                                color: (modelData.status && modelData.status.indexOf("installed") !== -1) ? themeColors.success
                                      : modelData.status === "unregistered" ? themeColors.warning
                                      : themeColors.muted
                                 font.pixelSize: 11
@@ -1538,7 +1545,7 @@ ApplicationWindow {
                             }
 
                             GtkButton {
-                                readonly property bool removable: modelData.status === "installed" || modelData.status === "unregistered"
+                                readonly property bool removable: modelData.status && (modelData.status.indexOf("installed") !== -1 || modelData.status === "unregistered")
                                 text: removable ? qsTr("Remove") : qsTr("Install")
                                 destructive: removable
                                 suggested: !removable

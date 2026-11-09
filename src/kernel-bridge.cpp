@@ -240,6 +240,47 @@ void KernelBridge::installKernel(const QString &name) {
     (void)future;
 }
 
+void KernelBridge::reconfigureKernel(const QString &name, const QString &type, const QString &version) {
+    appendLog("Initiating kernel reconfiguration (DKMS rebuild & initramfs generation) for: " + name);
+    setBusy(true);
+    setProgress(15);
+    setStatusMessage("Reconfiguring kernel & DKMS modules...", false);
+
+    auto future = QtConcurrent::run([this, name, type, version]() {
+        bool isManual = (type.toLower() == "manual") || (type.toLower() == "vkpurge");
+        std::string cmd;
+        if (!isManual && utils::packageInstalled(name.toStdString())) {
+            cmd = "pkexec xbps-reconfigure -f " + name.toStdString();
+        } else {
+            std::string ver = version.toStdString();
+            if (ver.empty()) ver = name.toStdString();
+            cmd = "pkexec sh -c \"if [ -x /etc/kernel.d/post-install/10-dkms ]; then /etc/kernel.d/post-install/10-dkms '" + name.toStdString() + "' '" + ver + "'; fi && "
+                  "if which dracut >/dev/null 2>&1; then dracut --force /boot/initramfs-" + ver + ".img " + ver + "; fi && "
+                  "(which grub-mkconfig >/dev/null 2>&1 && grub-mkconfig -o /boot/grub/grub.cfg || true)\"";
+        }
+
+        appendLog("Executing: " + QString::fromStdString(cmd));
+        auto result = utils::execWithOutput(cmd);
+        if (!result.stdout.empty()) appendLog(QString::fromStdString(result.stdout));
+        if (!result.stderr.empty()) appendLog(QString::fromStdString(result.stderr));
+        bool success = (result.exitCode == 0);
+
+        QMetaObject::invokeMethod(this, [this, success, name]() {
+            if (success) {
+                appendLog("Kernel reconfiguration completed successfully: " + name);
+                setStatusMessage("Kernel reconfigured successfully", false);
+            } else {
+                appendLog("ERROR: Kernel reconfiguration failed for: " + name);
+                setStatusMessage("Reconfiguration failed", true);
+            }
+            setBusy(false);
+            updateKernels();
+            updateDkmsModules();
+        });
+    });
+    (void)future;
+}
+
 // ----------------------------------------------------------------------------
 // removeKernel – CORREGIDA con detección de error por dependencias
 // ----------------------------------------------------------------------------
@@ -660,10 +701,12 @@ void KernelBridge::installDkmsModule(const QString &name, const QString &version
                 appendLog("ERROR: XBPS DKMS package installation failed for " + name);
             }
         } else {
-            // Instalar módulo DKMS manualmente
-            std::string cmd = "pkexec dkms install -m " + name.toStdString() +
+            // Instalar módulo DKMS manualmente y regenerar initramfs con dracut
+            std::string kver = kernel.toStdString();
+            std::string cmd = "pkexec sh -c \"dkms install -m " + name.toStdString() +
                               " -v " + version.toStdString() +
-                              " -k " + kernel.toStdString();
+                              " -k " + kver +
+                              " && (which dracut >/dev/null 2>&1 && dracut --force /boot/initramfs-" + kver + ".img " + kver + " || true)\"";
             appendLog("Executing dkms install: " + QString::fromStdString(cmd));
             auto result = utils::execWithOutput(cmd);
             if (!result.stdout.empty()) {
@@ -820,11 +863,13 @@ void KernelBridge::removeDkmsModule(const QString &name, const QString &version,
 }
 
 void KernelBridge::autoinstallDkms() {
-    appendLog("Initiating DKMS autoinstall for active kernel: " + activeKernelVersion());
+    QString activeK = activeKernelVersion();
+    appendLog("Initiating DKMS autoinstall for active kernel: " + activeK);
     setBusy(true);
 
-    auto future = QtConcurrent::run([this]() {
-        std::string cmd = "pkexec dkms autoinstall";
+    auto future = QtConcurrent::run([this, activeK]() {
+        std::string runningK = activeK.toStdString();
+        std::string cmd = "pkexec sh -c \"dkms autoinstall -k " + runningK + " && (which dracut >/dev/null 2>&1 && dracut --force /boot/initramfs-" + runningK + ".img " + runningK + " || true)\"";
         appendLog("Executing dkms autoinstall: " + QString::fromStdString(cmd));
         auto result = utils::execWithOutput(cmd);
         if (!result.stdout.empty()) {
@@ -837,7 +882,7 @@ void KernelBridge::autoinstallDkms() {
 
         QMetaObject::invokeMethod(this, [this, success]() {
             if (success) {
-                appendLog("DKMS autoinstall completed successfully.");
+                appendLog("DKMS autoinstall and initramfs update completed successfully.");
                 setStatusMessage("DKMS autoinstall completed", false);
             } else {
                 appendLog("ERROR: DKMS autoinstall failed.");

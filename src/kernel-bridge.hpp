@@ -30,6 +30,7 @@ public:
 
     Q_INVOKABLE void updateKernels();
     Q_INVOKABLE void installKernel(const QString &name);
+    Q_INVOKABLE void reconfigureKernel(const QString &name, const QString &type = "", const QString &version = "");
 
     // removeKernel: type y version son opcionales. Si no se pasan, la función los deduce.
     // - Si type == "manual", se asume kernel manual (basado en /boot).
