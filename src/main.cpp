@@ -11,7 +11,12 @@
 #include "theme-manager.hpp"
 
 int main(int argc, char *argv[]) {
-    // Set style to Fusion BEFORE creating QApplication to ensure consistency
+    // Forzar estilo Fusion y evitar que plugins de escritorio (qt6ct, Kvantum, KDE, GNOME)
+    // o variables de entorno alteren la paleta y apariencia de la aplicación
+    qputenv("QT_QUICK_CONTROLS_STYLE", "Fusion");
+    qputenv("QT_STYLE_OVERRIDE", "Fusion");
+    qunsetenv("QT_QPA_PLATFORMTHEME");
+
     QApplication::setStyle(QStyleFactory::create("Fusion"));
 
     // El nombre de la aplicación debe coincidir con el ID del portal (neko-kernel-manager)
@@ -80,10 +85,11 @@ int main(int argc, char *argv[]) {
     // System theme (Noctalia / matugen / pywal / libadwaita), with a dark fallback.
     ThemeManager theme;
 
-    // Keep native widgets (tooltips, native popups) in step with the theme, live.
+    // Forzar paleta Matecito Dark nativa para todos los componentes y estados
     auto applyNative = [&app, &theme]() {
         const QColor bg = theme.windowBg(), fg = theme.windowFg(), view = theme.viewBg(),
-                     card = theme.cardBg(), accent = theme.accentBg(), onAccent = theme.accentFg();
+                     card = theme.cardBg(), accent = theme.accentBg(), onAccent = theme.accentFg(),
+                     disabledFg("#68645e"), disabledBg("#222724");
         QPalette p;
         p.setColor(QPalette::Window, bg);
         p.setColor(QPalette::WindowText, fg);
@@ -98,9 +104,21 @@ int main(int argc, char *argv[]) {
         p.setColor(QPalette::Link, accent);
         p.setColor(QPalette::Highlight, accent);
         p.setColor(QPalette::HighlightedText, onAccent);
+
+        // Prevenir que el entorno de escritorio inyecte colores claros o discordantes
+        p.setColor(QPalette::Disabled, QPalette::WindowText, disabledFg);
+        p.setColor(QPalette::Disabled, QPalette::Text, disabledFg);
+        p.setColor(QPalette::Disabled, QPalette::ButtonText, disabledFg);
+        p.setColor(QPalette::Disabled, QPalette::Button, disabledBg);
+        p.setColor(QPalette::Disabled, QPalette::Base, disabledBg);
+        p.setColor(QPalette::Disabled, QPalette::Highlight, QColor("#37413b"));
+
         app.setPalette(p);
 
         app.setStyleSheet(QString(
+            "QWidget { background-color:%1; color:%2; font-family:'0xProto Nerd Font'; }"
+            "QMenu { background-color:%3; color:%2; border:1px solid rgba(211,205,195,0.18); padding:4px; }"
+            "QMenu::item:selected { background-color:%4; color:%5; border-radius:4px; }"
             "QComboBox { background-color:%1; color:%2; border:1px solid %3; padding:2px 10px; }"
             "QComboBox QAbstractItemView { background-color:%1; color:%2;"
             " selection-background-color:%4; selection-color:%5; border:1px solid %4; outline:none; }"

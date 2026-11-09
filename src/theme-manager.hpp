@@ -5,36 +5,32 @@
 #include <QHash>
 #include <QString>
 #include <QStringList>
-#include <QFileSystemWatcher>
 
-// Tracks the system theme the same way Neko Wizard does: it reads the standard
-// libadwaita colour tokens (window_bg_color, accent_bg_color, ...) that Noctalia's
-// template processor — or matugen / pywal / stock libadwaita — writes into the
-// user's GTK config. When that file changes the theme reloads live. When no such
-// file is present it falls back to the built-in "minimal / flat / sharp" dark
-// palette, so the app looks right on any system.
+// Matecito Dark (GTK3) Theme Manager.
+// Forces the consistent Matecito Dark appearance across all environments,
+// preventing external system palettes or desktop themes from altering the UI.
 class ThemeManager : public QObject {
     Q_OBJECT
-    Q_PROPERTY(QColor windowBg    READ windowBg    NOTIFY changed)
-    Q_PROPERTY(QColor windowFg    READ windowFg    NOTIFY changed)
-    Q_PROPERTY(QColor viewBg      READ viewBg      NOTIFY changed)
-    Q_PROPERTY(QColor cardBg      READ cardBg      NOTIFY changed)
-    Q_PROPERTY(QColor headerbarBg READ headerbarBg NOTIFY changed)
-    Q_PROPERTY(QColor headerbarFg READ headerbarFg NOTIFY changed)
-    Q_PROPERTY(QColor popoverBg   READ popoverBg   NOTIFY changed)
-    Q_PROPERTY(QColor accentBg    READ accentBg    NOTIFY changed)
-    Q_PROPERTY(QColor accentFg    READ accentFg    NOTIFY changed)
-    Q_PROPERTY(QColor errorBg     READ errorBg     NOTIFY changed)
-    Q_PROPERTY(QColor errorFg     READ errorFg     NOTIFY changed)
-    Q_PROPERTY(QColor sidebarBg   READ sidebarBg   NOTIFY changed)
-    Q_PROPERTY(QColor sidebarFg   READ sidebarFg   NOTIFY changed)
-    Q_PROPERTY(bool    themed     READ themed      NOTIFY changed)
-    Q_PROPERTY(QString source     READ source      NOTIFY changed)
+    Q_PROPERTY(QColor windowBg    READ windowBg    CONSTANT)
+    Q_PROPERTY(QColor windowFg    READ windowFg    CONSTANT)
+    Q_PROPERTY(QColor viewBg      READ viewBg      CONSTANT)
+    Q_PROPERTY(QColor cardBg      READ cardBg      CONSTANT)
+    Q_PROPERTY(QColor headerbarBg READ headerbarBg CONSTANT)
+    Q_PROPERTY(QColor headerbarFg READ headerbarFg CONSTANT)
+    Q_PROPERTY(QColor popoverBg   READ popoverBg   CONSTANT)
+    Q_PROPERTY(QColor accentBg    READ accentBg    CONSTANT)
+    Q_PROPERTY(QColor accentFg    READ accentFg    CONSTANT)
+    Q_PROPERTY(QColor errorBg     READ errorBg     CONSTANT)
+    Q_PROPERTY(QColor errorFg     READ errorFg     CONSTANT)
+    Q_PROPERTY(QColor sidebarBg   READ sidebarBg   CONSTANT)
+    Q_PROPERTY(QColor sidebarFg   READ sidebarFg   CONSTANT)
+    Q_PROPERTY(bool    themed     READ themed      CONSTANT)
+    Q_PROPERTY(QString source     READ source      CONSTANT)
 
 public:
     explicit ThemeManager(QObject *parent = nullptr);
 
-    // Matecito Dark (GTK3) default palette:
+    // Matecito Dark (GTK3) forced palette:
     // accent #8da383 (sage green), window/view #1e2320, card/headerbar #272e2a, text #d3cdc3
     QColor windowBg()    const { return get("window_bg_color",    QColor("#1e2320")); }
     QColor windowFg()    const { return get("window_fg_color",    QColor("#d3cdc3")); }
@@ -52,7 +48,6 @@ public:
     bool    themed()     const { return m_themed; }
     QString source()     const { return m_source; }
 
-    // Force a re-read (also wired to the file watcher)
     Q_INVOKABLE void reload();
 
 signals:
@@ -61,12 +56,9 @@ signals:
 private:
     QColor get(const QString &name, const QColor &fallback) const;
     void load();
-    void onWatch();
 
     QHash<QString, QColor> m_colors;
-    bool m_themed = false;
+    bool m_themed = true;
     QString m_source;
-    QFileSystemWatcher m_watcher;
     QStringList m_files;
-    QStringList m_dirs;
 };
