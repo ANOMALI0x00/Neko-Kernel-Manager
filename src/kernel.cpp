@@ -206,6 +206,23 @@ std::vector<Kernel> Kernel::getKernels() {
                 installedPkgs[pkg_name] = version;
             }
         }
+
+        // En Void Linux, 'linux', 'linux-lts' y 'linux-mainline' son metapaquetes vacíos de conveniencia.
+        // Si el paquete real concreto (ej. linux6.18) ya está instalado, evitar listar el metapaquete duplicado.
+        if (installedPkgs.count("linux")) {
+            for (const auto &p : installedPkgs) {
+                if (p.first != "linux" && p.first.rfind("linux", 0) == 0 && p.first.size() > 5 && std::isdigit(p.first[5])) {
+                    installedPkgs.erase("linux");
+                    break;
+                }
+            }
+        }
+        if (installedPkgs.count("linux-lts") && installedPkgs.count("linux6.12")) {
+            installedPkgs.erase("linux-lts");
+        }
+        if (installedPkgs.count("linux-mainline") && installedPkgs.count("linux7.3")) {
+            installedPkgs.erase("linux-mainline");
+        }
     }
 
     // Fase 2: escaneo de /boot para resolución de releases reales y detección de huérfanos
@@ -318,6 +335,17 @@ std::vector<Kernel> Kernel::getKernels() {
 
             if (!isKernelPackage(pkg_name)) continue;
             if (knownNames.count(pkg_name)) continue;
+
+            if (pkg_name == "linux") {
+                bool hasSeries = false;
+                for (const auto &kn : knownNames) {
+                    if (kn != "linux" && kn.rfind("linux", 0) == 0 && kn.size() > 5 && std::isdigit(kn[5])) {
+                        hasSeries = true;
+                        break;
+                    }
+                }
+                if (hasSeries) continue;
+            }
 
             bool installed = (installedPkgs.count(pkg_name) > 0) || (status == "[*]");
             bool hasFiles = false;

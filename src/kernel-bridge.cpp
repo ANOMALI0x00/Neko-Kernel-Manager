@@ -139,6 +139,14 @@ void KernelBridge::appendLog(const QString &line) {
         return;
     }
 
+    if (line.contains('\n')) {
+        const QStringList parts = line.split('\n', Qt::SkipEmptyParts);
+        for (const QString &part : parts) {
+            appendLog(part);
+        }
+        return;
+    }
+
     QString timestamp = QDateTime::currentDateTime().toString("hh:mm:ss");
     QString formattedLine = "[" + timestamp + "] ";
 
@@ -345,7 +353,7 @@ void KernelBridge::removeKernel(const QString &name, const QString &type, const 
 
         if (isVkpurge) {
             std::string ver = targetVersion.toStdString();
-            cmd = "pkexec sh -c \"vkpurge rm " + ver + " && (which grub-mkconfig >/dev/null 2>&1 && grub-mkconfig -o /boot/grub/grub.cfg || true)\"";
+            cmd = "pkexec vkpurge rm " + ver;
             appendLog("Executing vkpurge: " + QString::fromStdString(cmd));
             auto result = utils::execWithOutput(cmd);
             if (!result.stdout.empty()) appendLog(QString::fromStdString(result.stdout));
@@ -359,7 +367,7 @@ void KernelBridge::removeKernel(const QString &name, const QString &type, const 
             std::string ver = targetVersion.toStdString();
             success = removeFilesManually(ver);
         } else {
-            // Paquete XBPS
+            // Paquete XBPS (los hooks de /etc/kernel.d/ actualizan GRUB automáticamente)
             std::string pkgName = name.toStdString();
             std::string toRemove = pkgName;
             std::string headersPkg = pkgName + "-headers";
@@ -368,7 +376,7 @@ void KernelBridge::removeKernel(const QString &name, const QString &type, const 
                 appendLog("Kernel headers package also detected (" + QString::fromStdString(headersPkg) + ") and included in removal.");
             }
 
-            cmd = "pkexec sh -c \"xbps-remove -Rfy " + toRemove + " && (which grub-mkconfig >/dev/null 2>&1 && grub-mkconfig -o /boot/grub/grub.cfg || true)\"";
+            cmd = "pkexec xbps-remove -Rfy " + toRemove;
             appendLog("Executing xbps-remove: " + QString::fromStdString(cmd));
             auto result = utils::execWithOutput(cmd);
             if (!result.stdout.empty()) appendLog(QString::fromStdString(result.stdout));
@@ -382,7 +390,7 @@ void KernelBridge::removeKernel(const QString &name, const QString &type, const 
                     output.find("dependency") != std::string::npos ||
                     output.find("Transaction aborted") != std::string::npos) {
                     appendLog("Metapackage reverse dependency conflict detected. Re-attempting removal with XBPS --force-revdeps (-RFy)...");
-                    cmd = "pkexec sh -c \"xbps-remove -RFy " + toRemove + " && (which grub-mkconfig >/dev/null 2>&1 && grub-mkconfig -o /boot/grub/grub.cfg || true)\"";
+                    cmd = "pkexec xbps-remove -RFy " + toRemove;
                     auto resForce = utils::execWithOutput(cmd);
                     if (!resForce.stdout.empty()) appendLog(QString::fromStdString(resForce.stdout));
                     if (!resForce.stderr.empty()) appendLog(QString::fromStdString(resForce.stderr));
@@ -420,7 +428,7 @@ void KernelBridge::vkpurge() {
     setProgress(10);
     setStatusMessage("Purging all old kernels...", false);
     auto future = QtConcurrent::run([this]() {
-        std::string cmd = "pkexec sh -c \"vkpurge rm all && (which grub-mkconfig >/dev/null 2>&1 && grub-mkconfig -o /boot/grub/grub.cfg || true)\"";
+        std::string cmd = "pkexec vkpurge rm all";
 
         QMetaObject::invokeMethod(this, [this]() {
             setProgress(30);
