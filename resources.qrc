@@ -12,5 +12,6 @@
         <file>Data/fonts/0xProtoNerdFontPropo-Regular.ttf</file>
         <file>Data/fonts/0xProtoNerdFontPropo-Bold.ttf</file>
         <file>Data/fonts/0xProtoNerdFontPropo-Italic.ttf</file>
+        <file>Data/themes/matecito-dark.css</file>
     </qresource>
 </RCC>

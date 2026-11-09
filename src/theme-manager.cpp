@@ -48,29 +48,48 @@ static QColor parseValue(QString v, const QHash<QString, QString> &raw, int dept
 }
 
 ThemeManager::ThemeManager(QObject *parent) : QObject(parent) {
-    m_dir = QString::fromStdString(utils::getRealHome()) + "/.config/gtk-4.0";
-    // gtk.css is where matugen / pywal / libadwaita write; noctalia.css is what
-    // gtk.css @imports for Noctalia. Later files win, matching GTK's load order.
-    m_files = { m_dir + "/gtk.css", m_dir + "/noctalia.css" };
+    QString home = QString::fromStdString(utils::getRealHome());
+    QString gtk3Dir = home + "/.config/gtk-3.0";
+    QString gtk4Dir = home + "/.config/gtk-4.0";
+    m_dirs = { gtk3Dir, gtk4Dir };
+
+    // Search order: Bundled Matecito Dark -> GTK3 config -> GTK4 config
+    m_files = {
+        ":/neko/Data/themes/matecito-dark.css",
+        "Data/themes/matecito-dark.css",
+        gtk3Dir + "/colors.css",
+        gtk3Dir + "/gtk.css",
+        gtk3Dir + "/noctalia.css",
+        gtk4Dir + "/colors.css",
+        gtk4Dir + "/gtk.css",
+        gtk4Dir + "/noctalia.css"
+    };
 
     load();
 
-    // Watch the directory (catches atomic replaces) and each file we know about.
-    if (QFile::exists(m_dir))
-        m_watcher.addPath(m_dir);
-    for (const QString &f : m_files)
-        if (QFile::exists(f))
+    // Watch directories and existing files for live changes
+    for (const QString &d : m_dirs) {
+        if (QFile::exists(d))
+            m_watcher.addPath(d);
+    }
+    for (const QString &f : m_files) {
+        if (QFile::exists(f) && !f.startsWith(":/"))
             m_watcher.addPath(f);
+    }
 
     connect(&m_watcher, &QFileSystemWatcher::fileChanged, this, &ThemeManager::onWatch);
     connect(&m_watcher, &QFileSystemWatcher::directoryChanged, this, &ThemeManager::onWatch);
 }
 
 void ThemeManager::onWatch() {
-    // Editors/generators replace files atomically, which drops the watch — re-add.
-    for (const QString &f : m_files)
-        if (QFile::exists(f) && !m_watcher.files().contains(f))
+    for (const QString &d : m_dirs) {
+        if (QFile::exists(d) && !m_watcher.directories().contains(d))
+            m_watcher.addPath(d);
+    }
+    for (const QString &f : m_files) {
+        if (QFile::exists(f) && !f.startsWith(":/") && !m_watcher.files().contains(f))
             m_watcher.addPath(f);
+    }
     load();
     emit changed();
 }
@@ -100,8 +119,6 @@ void ThemeManager::load() {
         }
         QFile f(path);
         if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            // Mensaje de depuración (no crítico)
-            qDebug() << "ThemeManager: Could not open" << path;
             continue;
         }
         const QString text = QString::fromUtf8(f.readAll());
@@ -115,6 +132,16 @@ void ThemeManager::load() {
         if (any)
             foundIn = path;
     }
+
+    // Map common GTK3 token aliases if specific libadwaita/noctalia tokens aren't present
+    if (raw.contains("theme_bg_color") && !raw.contains("window_bg_color"))
+        raw.insert("window_bg_color", raw.value("theme_bg_color"));
+    if (raw.contains("theme_fg_color") && !raw.contains("window_fg_color"))
+        raw.insert("window_fg_color", raw.value("theme_fg_color"));
+    if (raw.contains("theme_selected_bg_color") && !raw.contains("accent_bg_color"))
+        raw.insert("accent_bg_color", raw.value("theme_selected_bg_color"));
+    if (raw.contains("theme_selected_fg_color") && !raw.contains("accent_fg_color"))
+        raw.insert("accent_fg_color", raw.value("theme_selected_fg_color"));
 
     m_colors.clear();
     for (auto it = raw.constBegin(); it != raw.constEnd(); ++it) {

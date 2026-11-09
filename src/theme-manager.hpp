@@ -26,23 +26,29 @@ class ThemeManager : public QObject {
     Q_PROPERTY(QColor accentFg    READ accentFg    NOTIFY changed)
     Q_PROPERTY(QColor errorBg     READ errorBg     NOTIFY changed)
     Q_PROPERTY(QColor errorFg     READ errorFg     NOTIFY changed)
+    Q_PROPERTY(QColor sidebarBg   READ sidebarBg   NOTIFY changed)
+    Q_PROPERTY(QColor sidebarFg   READ sidebarFg   NOTIFY changed)
     Q_PROPERTY(bool    themed     READ themed      NOTIFY changed)
     Q_PROPERTY(QString source     READ source      NOTIFY changed)
 
 public:
     explicit ThemeManager(QObject *parent = nullptr);
 
-    QColor windowBg()    const { return get("window_bg_color",    QColor("#101010")); }
-    QColor windowFg()    const { return get("window_fg_color",    QColor("#ececec")); }
+    // Matecito Dark (GTK3) default palette:
+    // accent #8da383 (sage green), window/view #1e2320, card/headerbar #272e2a, text #d3cdc3
+    QColor windowBg()    const { return get("window_bg_color",    QColor("#1e2320")); }
+    QColor windowFg()    const { return get("window_fg_color",    QColor("#d3cdc3")); }
     QColor viewBg()      const { return get("view_bg_color",      windowBg()); }
-    QColor cardBg()      const { return get("card_bg_color",      QColor("#171717")); }
-    QColor headerbarBg() const { return get("headerbar_bg_color", windowBg()); }
+    QColor cardBg()      const { return get("card_bg_color",      QColor("#272e2a")); }
+    QColor headerbarBg() const { return get("headerbar_bg_color", QColor("#272e2a")); }
     QColor headerbarFg() const { return get("headerbar_fg_color", windowFg()); }
     QColor popoverBg()   const { return get("popover_bg_color",   cardBg()); }
-    QColor accentBg()    const { return get("accent_bg_color",    QColor("#4a90e2")); }
-    QColor accentFg()    const { return get("accent_fg_color",    QColor("#ffffff")); }
-    QColor errorBg()     const { return get("error_bg_color",     QColor("#cc3b33")); }
-    QColor errorFg()     const { return get("error_fg_color",     QColor("#ffffff")); }
+    QColor accentBg()    const { return get("accent_bg_color",    QColor("#8da383")); }
+    QColor accentFg()    const { return get("accent_fg_color",    QColor("#1e2320")); }
+    QColor errorBg()     const { return get("error_bg_color",     QColor("#c27979")); }
+    QColor errorFg()     const { return get("error_fg_color",     QColor("#1e2320")); }
+    QColor sidebarBg()   const { return get("sidebar_bg_color",   cardBg()); }
+    QColor sidebarFg()   const { return get("sidebar_fg_color",   windowFg()); }
     bool    themed()     const { return m_themed; }
     QString source()     const { return m_source; }
 
@@ -62,5 +68,5 @@ private:
     QString m_source;
     QFileSystemWatcher m_watcher;
     QStringList m_files;
-    QString m_dir;
+    QStringList m_dirs;
 };
