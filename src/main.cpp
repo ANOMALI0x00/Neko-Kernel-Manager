@@ -7,6 +7,9 @@
 #include <QFontDatabase>
 #include <QPalette>
 #include <QStyleFactory>
+#include <QQuickWindow>
+#include <QTimer>
+#include <cstdlib>
 #include "kernel-bridge.hpp"
 #include "theme-manager.hpp"
 
@@ -32,10 +35,19 @@ int main(int argc, char *argv[]) {
 
     // Parse command line arguments
     bool verbose = false;
+    QString screenshotPath;
+    QString screenshotDialog;
+    int screenshotTab = 0;
     for (int i = 1; i < argc; ++i) {
         QString arg = QString::fromLocal8Bit(argv[i]);
         if (arg == "--verbose" || arg == "-v" || arg == "--debug") {
             verbose = true;
+        } else if (arg == "--screenshot" && i + 1 < argc) {
+            screenshotPath = QString::fromLocal8Bit(argv[++i]);
+        } else if (arg == "--screenshot-tab" && i + 1 < argc) {
+            screenshotTab = QString::fromLocal8Bit(argv[++i]).toInt();
+        } else if (arg == "--screenshot-dialog" && i + 1 < argc) {
+            screenshotDialog = QString::fromLocal8Bit(argv[++i]);
         }
     }
 
@@ -146,6 +158,38 @@ int main(int argc, char *argv[]) {
 
     if (engine.rootObjects().isEmpty()) {
         return -1;
+    }
+
+    if (!screenshotPath.isEmpty()) {
+        QQuickWindow *win = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
+        if (win) {
+            auto takeShot = [win, screenshotPath, screenshotTab, screenshotDialog]() {
+                if (!screenshotDialog.isEmpty()) {
+                    QObject *dlg = win->findChild<QObject*>(screenshotDialog);
+                    if (dlg) {
+                        QMetaObject::invokeMethod(dlg, "open");
+                    }
+                } else if (screenshotTab > 0) {
+                    QObject *tabs = win->findChild<QObject*>("detailTabs");
+                    if (tabs) {
+                        tabs->setProperty("currentIndex", screenshotTab);
+                    }
+                }
+                QTimer::singleShot(1500, [win, screenshotPath]() {
+                    QImage img = win->grabWindow();
+                    img.save(screenshotPath);
+                    qInfo() << "Screenshot saved to:" << screenshotPath;
+                    std::exit(0);
+                });
+            };
+
+            QObject::connect(&bridge, &KernelBridge::busyChanged, [&bridge, takeShot]() {
+                if (!bridge.busy()) {
+                    // Esperar a que la lista de kernels se pueble y la UI seleccione el kernel activo
+                    QTimer::singleShot(1500, takeShot);
+                }
+            });
+        }
     }
 
     return app.exec();

@@ -900,6 +900,7 @@ ApplicationWindow {
                     // GTK3 Tabs
                     TabBar {
                         id: detailTabs
+                        objectName: "detailTabs"
                         Layout.fillWidth: true
                         Layout.preferredHeight: 38
                         background: Rectangle {
@@ -1138,7 +1139,7 @@ ApplicationWindow {
                                         color: themeColors.muted
                                         font.family: "0xProto Nerd Font Mono"
                                         font.pixelSize: 11
-                                        textFormat: Text.PlainText
+                                        textFormat: Text.RichText
                                         wrapMode: Text.WrapAnywhere
                                         elide: Text.ElideRight
                                     }
@@ -1440,6 +1441,7 @@ ApplicationWindow {
     // DKMS Dialog
     Dialog {
         id: dkmsDialog
+        objectName: "dkmsDialog"
         x: Math.round((window.width - width) / 2)
         y: Math.round((window.height - height) / 2)
         width: Math.min(800, window.width - 48)
