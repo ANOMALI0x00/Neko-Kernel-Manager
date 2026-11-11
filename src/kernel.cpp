@@ -6,6 +6,8 @@
 #include <set>
 #include <map>
 #include <algorithm>
+#include <cstdint>
+#include <cctype>
 
 Kernel::Kernel(Package pkg, Package headers) : m_pkg(pkg), m_headers(headers) {}
 
@@ -37,14 +39,33 @@ std::string Kernel::category() const {
 }
 
 std::string Kernel::size() const {
-    if (m_pkg.type == "manual") return "Unknown";
+    if (m_pkg.type == "manual" || m_pkg.type == "vkpurge") {
+        std::uintmax_t totalBytes = 0;
+        const std::vector<std::string> files = {
+            "/boot/vmlinuz-" + m_pkg.version,
+            "/boot/initramfs-" + m_pkg.version + ".img",
+            "/boot/initrd.img-" + m_pkg.version,
+            "/boot/System.map-" + m_pkg.version,
+            "/boot/config-" + m_pkg.version
+        };
+        std::error_code ec;
+        for (const auto &path : files) {
+            if (std::filesystem::exists(path, ec) && std::filesystem::is_regular_file(path, ec)) {
+                totalBytes += std::filesystem::file_size(path, ec);
+            }
+        }
+        if (totalBytes == 0) return "Unknown";
+        const std::uintmax_t mb = totalBytes / (1024 * 1024);
+        if (mb > 0) return std::to_string(mb) + "MB";
+        return std::to_string(totalBytes / 1024) + "KB";
+    }
     std::string s = utils::exec("xbps-query -p installed_size " + m_pkg.name);
     if (s.empty() || s.find("not found") != std::string::npos) return "Unknown";
     return s;
 }
 
 std::string Kernel::installDate() const {
-    if (m_pkg.type == "manual") return "N/A";
+    if (m_pkg.type == "manual" || m_pkg.type == "vkpurge") return "N/A";
     std::string d = utils::exec("xbps-query -p install-date " + m_pkg.name);
     if (d.empty() || d.find("not found") != std::string::npos) return "N/A";
     return d;

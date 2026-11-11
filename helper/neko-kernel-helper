@@ -103,6 +103,9 @@ case "$ACTION" in
     vkpurge-rm-all)
         echo "Purgando todos los kernels no utilizados con vkpurge..."
         vkpurge rm all
+        if which grub-mkconfig >/dev/null 2>&1; then
+            grub-mkconfig -o /boot/grub/grub.cfg || true
+        fi
         ;;
 
     manual-remove)

@@ -91,7 +91,7 @@ ApplicationWindow {
         var count = 0
         var kernels = bridge.kernels || []
         for (var index = 0; index < kernels.length; ++index) {
-            if (kernels[index].installed)
+            if (kernels[index].installed && kernels[index].hasFiles && kernels[index].type !== "vkpurge")
                 ++count
         }
         return count
@@ -720,17 +720,22 @@ ApplicationWindow {
 
                                         Rectangle {
                                             id: statusPill
+                                            readonly property bool isOrphan: modelData.type === "vkpurge"
+                                            readonly property bool isManual: modelData.type === "manual"
+                                            readonly property bool isNoFiles: modelData.installed && !modelData.hasFiles && !isOrphan
                                             implicitHeight: 22
                                             implicitWidth: statusText.implicitWidth + 16
                                             radius: 11
                                             color: kernelRow.isSelected ? Qt.rgba(30/255, 35/255, 32/255, 0.20)
                                                  : kernelRow.running ? Qt.rgba(212/255, 154/255, 91/255, 0.18)
                                                  : kernelRow.defaultKernel ? Qt.rgba(141/255, 163/255, 131/255, 0.22)
+                                                 : isOrphan ? Qt.rgba(194/255, 121/255, 121/255, 0.16)
                                                  : modelData.installed ? Qt.rgba(211/255, 205/255, 195/255, 0.10)
                                                  : "transparent"
                                             border.color: kernelRow.isSelected ? Qt.rgba(30/255, 35/255, 32/255, 0.40)
                                                         : kernelRow.running ? themeColors.warning
                                                         : kernelRow.defaultKernel ? themeColors.selected
+                                                        : isOrphan ? themeColors.error
                                                         : modelData.installed ? themeColors.strongBorder
                                                         : "transparent"
                                             border.width: 1
@@ -745,6 +750,8 @@ ApplicationWindow {
                                                     color: kernelRow.isSelected ? themeColors.selectedText
                                                          : kernelRow.running ? themeColors.warning
                                                          : kernelRow.defaultKernel ? themeColors.selected
+                                                         : statusPill.isOrphan ? themeColors.error
+                                                         : statusPill.isNoFiles ? themeColors.muted
                                                          : modelData.installed ? themeColors.text
                                                          : themeColors.faint
                                                 }
@@ -752,15 +759,20 @@ ApplicationWindow {
                                                     id: statusText
                                                     text: kernelRow.running ? qsTr("Running")
                                                          : kernelRow.defaultKernel ? qsTr("Default")
+                                                         : statusPill.isOrphan ? qsTr("Orphan")
+                                                         : statusPill.isManual ? qsTr("Manual")
+                                                         : statusPill.isNoFiles ? qsTr("Meta")
                                                          : modelData.installed ? qsTr("Installed")
                                                          : qsTr("Available")
                                                     color: kernelRow.isSelected ? themeColors.selectedText
                                                          : kernelRow.running ? themeColors.warning
                                                          : kernelRow.defaultKernel ? themeColors.selected
+                                                         : statusPill.isOrphan ? themeColors.error
+                                                         : statusPill.isNoFiles ? themeColors.muted
                                                          : modelData.installed ? themeColors.text
                                                          : themeColors.muted
                                                     font.pixelSize: 11
-                                                    font.weight: (kernelRow.running || kernelRow.defaultKernel) ? Font.DemiBold : Font.Normal
+                                                    font.weight: (kernelRow.running || kernelRow.defaultKernel || statusPill.isOrphan) ? Font.DemiBold : Font.Normal
                                                 }
                                             }
                                         }
@@ -1029,11 +1041,18 @@ ApplicationWindow {
                                               ? qsTr("This kernel is currently running and cannot be removed.")
                                               : window.kernelIsDefault(window.selectedKernel)
                                                 ? qsTr("This kernel is selected as default boot entry (Repo: %1)").arg(window.selectedKernel.repo || qsTr("System"))
-                                                : window.selectedKernel && window.selectedKernel.installed
-                                                  ? qsTr("Installed on %1 · Repo: %2").arg(window.selectedKernel.installDate || qsTr("an unknown date")).arg(window.selectedKernel.repo || qsTr("System"))
-                                                  : qsTr("Available from repository: %1").arg(window.selectedKernel ? (window.selectedKernel.repo || qsTr("System")) : qsTr("Void repositories"))
+                                                : window.selectedKernel && window.selectedKernel.type === "vkpurge"
+                                                  ? qsTr("Obsolete kernel left behind after updates (tracked by vkpurge). Recommended to remove.")
+                                                  : window.selectedKernel && window.selectedKernel.type === "manual"
+                                                    ? qsTr("Locally compiled or manually installed kernel in /boot.")
+                                                    : window.selectedKernel && window.selectedKernel.installed && !window.selectedKernel.hasFiles
+                                                      ? qsTr("Metapackage without bootable kernel image in /boot.")
+                                                      : window.selectedKernel && window.selectedKernel.installed
+                                                        ? qsTr("Installed on %1 · Repo: %2").arg(window.selectedKernel.installDate || qsTr("an unknown date")).arg(window.selectedKernel.repo || qsTr("System"))
+                                                        : qsTr("Available from repository: %1").arg(window.selectedKernel ? (window.selectedKernel.repo || qsTr("System")) : qsTr("Void repositories"))
                                         color: window.kernelIsRunning(window.selectedKernel) ? themeColors.warning
                                              : window.kernelIsDefault(window.selectedKernel) ? themeColors.selected
+                                             : (window.selectedKernel && window.selectedKernel.type === "vkpurge") ? themeColors.error
                                              : themeColors.muted
                                         font.pixelSize: 12
                                         elide: Text.ElideRight
@@ -1052,14 +1071,14 @@ ApplicationWindow {
                                     }
 
                                     GtkButton {
-                                        visible: window.selectedKernel && window.selectedKernel.installed && !window.kernelIsDefault(window.selectedKernel)
+                                        visible: window.selectedKernel && window.selectedKernel.installed && window.selectedKernel.hasFiles && window.selectedKernel.type !== "vkpurge" && !window.kernelIsDefault(window.selectedKernel)
                                         enabled: visible && !bridge.busy
                                         text: qsTr("Set as Default")
                                         onClicked: bridge.setDefaultKernel(window.selectedKernel.version)
                                     }
 
                                     GtkButton {
-                                        visible: window.selectedKernel && window.selectedKernel.installed
+                                        visible: window.selectedKernel && window.selectedKernel.installed && window.selectedKernel.hasFiles && window.selectedKernel.type !== "vkpurge"
                                         enabled: visible && !bridge.busy
                                         text: qsTr("Reconfigure")
                                         onClicked: bridge.reconfigureKernel(window.selectedKernel.name, window.selectedKernel.type || "", window.selectedKernel.version || "")
@@ -1067,7 +1086,7 @@ ApplicationWindow {
 
                                     GtkButton {
                                         visible: window.selectedKernel && window.selectedKernel.installed && !window.kernelIsRunning(window.selectedKernel)
-                                        enabled: visible && !bridge.busy && (window.installedKernelCount > 1 || (window.selectedKernel && window.selectedKernel.type === "vkpurge"))
+                                        enabled: visible && !bridge.busy && (window.installedKernelCount > 1 || (window.selectedKernel && (window.selectedKernel.type === "vkpurge" || !window.selectedKernel.hasFiles)))
                                         destructive: true
                                         text: qsTr("Remove")
                                         onClicked: {
@@ -1231,6 +1250,10 @@ ApplicationWindow {
                         return qsTr("Are you sure you want to purge obsolete kernel files for %1?\n\nThis kernel is an unreferenced leftover tracked by vkpurge. It will be cleanly removed from /boot.")
                             .arg(k.version)
                     }
+                    if (k.type === "manual") {
+                        return qsTr("Are you sure you want to remove the manual kernel %1?\n\nCorresponding files in /boot and /lib/modules will be deleted and the GRUB boot menu will be updated.")
+                            .arg(k.version)
+                    }
                     return qsTr("Are you sure you want to remove %1 (%2)?\n\nThe currently running kernel is protected, but this action cannot be undone.")
                         .arg(k.name).arg(k.version)
                 }
@@ -1321,7 +1344,7 @@ ApplicationWindow {
                         id: purgeListText
                         text: purgeDialog.vkList
                         color: themeColors.warning
-                        font.family: "Monospace"
+                        font.family: "0xProto Nerd Font Mono"
                         font.pixelSize: 12
                     }
                 }
@@ -1354,7 +1377,7 @@ ApplicationWindow {
                 GtkButton {
                     text: qsTr("Purge")
                     destructive: true
-                    enabled: !bridge.busy
+                    enabled: !bridge.busy && purgeDialog.vkList.length > 0
                     onClicked: {
                         purgeDialog.close()
                         bridge.vkpurge()

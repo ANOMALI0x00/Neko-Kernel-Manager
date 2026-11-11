@@ -394,16 +394,21 @@ void KernelBridge::removeKernel(const QString &name, const QString &type, const 
         }
     }
 
-    // Seguridad: no permitir eliminar el único kernel instalado
+    // Seguridad: no permitir eliminar el único kernel funcional instalado
     int installedCount = 0;
+    bool targetHasFiles = true;
     for (const auto &var : m_kernelsCache) {
-        if (var.toMap()["installed"].toBool()) {
+        QVariantMap m = var.toMap();
+        if (m["installed"].toBool() && m["hasFiles"].toBool() && m["type"].toString() != "vkpurge") {
             installedCount++;
         }
+        if (m["name"].toString() == name) {
+            targetHasFiles = m["hasFiles"].toBool();
+        }
     }
-    if (installedCount <= 1 && !isVkpurge) {
-        appendLog("SECURITY ERROR: Cannot remove the only installed kernel. Install another kernel first to ensure your system remains bootable.");
-        setStatusMessage("Cannot remove the only installed kernel! Install another kernel first.", true);
+    if (installedCount <= 1 && !isVkpurge && targetHasFiles) {
+        appendLog("SECURITY ERROR: Cannot remove the only functional installed kernel. Install another kernel first to ensure your system remains bootable.");
+        setStatusMessage("Cannot remove the only bootable kernel! Install another kernel first.", true);
         return;
     }
 
@@ -586,7 +591,6 @@ void KernelBridge::vkpurge() {
                 self->appendLog("ERROR: vkpurge failed.");
                 self->setStatusMessage("vkpurge failed", true);
             }
-            self->setBusy(false);
             self->updateKernels();
             self->updateDkmsModules();
             self->updateDefaultKernel();
@@ -1033,6 +1037,11 @@ void KernelBridge::removeDkmsModule(const QString &name, const QString &version,
 
 void KernelBridge::autoinstallDkms() {
     QString activeK = activeKernelVersion();
+    if (activeK.isEmpty() || !isValidVersion(activeK)) {
+        appendLog("ERROR: Cannot determine a valid active kernel version for DKMS autoinstall.");
+        setStatusMessage("Invalid active kernel version", true);
+        return;
+    }
     appendLog("Initiating DKMS autoinstall for active kernel: " + activeK);
     setBusy(true);
 
@@ -1099,6 +1108,10 @@ QString KernelBridge::getDefaultKernelInternal() {
                                     if (idx != -1) {
                                         return savedVal.mid(idx + marker.size()).trimmed();
                                     }
+                                }
+                                int arrowIdx = savedVal.lastIndexOf('>');
+                                if (arrowIdx != -1) {
+                                    return savedVal.mid(arrowIdx + 1).trimmed();
                                 }
                                 return savedVal;
                             }
