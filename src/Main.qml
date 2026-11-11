@@ -261,69 +261,6 @@ ApplicationWindow {
         }
     }
 
-    // GTK Menu Bar
-    menuBar: MenuBar {
-        Menu {
-            title: qsTr("File")
-            MenuItem {
-                text: qsTr("Export Logs…")
-                enabled: bridge.logs.length > 0
-                onTriggered: fileDialog.open()
-            }
-            MenuSeparator { }
-            MenuItem { text: qsTr("Close"); onTriggered: window.close() }
-        }
-        Menu {
-            title: qsTr("Edit")
-            MenuItem {
-                text: qsTr("Show Installed Kernels Only")
-                checkable: true
-                checked: window.installedOnly
-                onToggled: {
-                    window.installedOnly = checked
-                    window.selectFirstVisibleKernel(true)
-                }
-            }
-            MenuItem {
-                text: qsTr("Clear Search")
-                enabled: kernelSearch.text.length > 0
-                onTriggered: kernelSearch.clear()
-            }
-        }
-        Menu {
-            title: qsTr("View")
-            MenuItem {
-                text: qsTr("Refresh Kernels")
-                enabled: !bridge.busy
-                onTriggered: window.refreshKernels()
-            }
-            MenuItem { text: qsTr("Activity Log"); onTriggered: logDialog.open() }
-        }
-        Menu {
-            title: qsTr("Help")
-            MenuItem { text: qsTr("About Neko Kernel Manager"); onTriggered: aboutDialog.open() }
-        }
-
-        delegate: MenuBarItem {
-            id: menuItem
-            contentItem: Text {
-                text: menuItem.text
-                color: themeColors.text
-                font.pixelSize: 12
-                verticalAlignment: Text.AlignVCenter
-            }
-            background: Rectangle {
-                color: menuItem.highlighted ? themeColors.hover : "transparent"
-                radius: 4
-            }
-        }
-        background: Rectangle {
-            color: themeColors.toolbar
-            border.color: themeColors.border
-            border.width: 1
-        }
-    }
-
     Shortcut {
         sequence: "Ctrl+R"
         enabled: !bridge.busy
