@@ -59,14 +59,14 @@ std::string Kernel::size() const {
         if (mb > 0) return std::to_string(mb) + "MB";
         return std::to_string(totalBytes / 1024) + "KB";
     }
-    std::string s = utils::exec("xbps-query -p installed_size " + m_pkg.name);
+    std::string s = utils::execProgram("xbps-query", {"-p", "installed_size", m_pkg.name});
     if (s.empty() || s.find("not found") != std::string::npos) return "Unknown";
     return s;
 }
 
 std::string Kernel::installDate() const {
     if (m_pkg.type == "manual" || m_pkg.type == "vkpurge") return "N/A";
-    std::string d = utils::exec("xbps-query -p install-date " + m_pkg.name);
+    std::string d = utils::execProgram("xbps-query", {"-p", "install-date", m_pkg.name});
     if (d.empty() || d.find("not found") != std::string::npos) return "N/A";
     return d;
 }
@@ -99,11 +99,11 @@ std::vector<Kernel> Kernel::getKernels() {
     // Consultar kernels antiguos rastreados por vkpurge
     std::set<std::string> vkpurgeSet;
     if (utils::commandExists("vkpurge")) {
-        std::string vkOut = utils::exec("vkpurge list");
+        std::string vkOut = utils::execProgram("vkpurge", {"list"});
         std::vector<std::string> vkLines = utils::split(vkOut, '\n');
         for (const auto &vkLine : vkLines) {
             std::string t = utils::trim(vkLine);
-            if (!t.empty() && std::isdigit(t[0])) {
+            if (!t.empty() && std::isdigit(static_cast<unsigned char>(t[0]))) {
                 vkpurgeSet.insert(t);
             }
         }
@@ -119,9 +119,10 @@ std::vector<Kernel> Kernel::getKernels() {
         if (!utils::commandExists("xbps-query")) {
             return "System";
         }
-        std::string cmd = installed ? ("xbps-query -p repository " + pkgName)
-                                    : ("xbps-query -R -p repository " + pkgName);
-        std::string repoUrl = utils::trim(utils::exec(cmd));
+        std::string rawRepo = installed
+            ? utils::execProgram("xbps-query", {"-p", "repository", pkgName})
+            : utils::execProgram("xbps-query", {"-R", "-p", "repository", pkgName});
+        std::string repoUrl = utils::trim(rawRepo);
         if (repoUrl.find("neko-void") != std::string::npos || repoUrl.find("sourceforge.net") != std::string::npos) {
             return "Neko Void";
         }
@@ -183,7 +184,7 @@ std::vector<Kernel> Kernel::getKernels() {
     // Devuelve el nombre del paquete propietario de un archivo
     auto getOwnerPackage = [&installedPkgs](const std::string &filePath) -> std::string {
         if (!utils::commandExists("xbps-query")) return "";
-        std::string res = utils::exec("xbps-query -o " + filePath);
+        std::string res = utils::execProgram("xbps-query", {"-o", filePath});
         if (res.empty() || res.find("not owned") != std::string::npos || res.find("No such file") != std::string::npos) return "";
         size_t colon_pos = res.find(':');
         if (colon_pos == std::string::npos) return "";
@@ -198,7 +199,7 @@ std::vector<Kernel> Kernel::getKernels() {
 
     // Fase 1: estado de paquetes instalados. Solo se aceptan paquetes con estado 'ii'
     if (utils::commandExists("xbps-query")) {
-        std::string installedOutput = utils::exec("xbps-query -l");
+        std::string installedOutput = utils::execProgram("xbps-query", {"-l"});
         std::vector<std::string> installedLines = utils::split(installedOutput, '\n');
         for (const auto &line : installedLines) {
             if (line.size() < 4) continue;
@@ -324,9 +325,9 @@ std::vector<Kernel> Kernel::getKernels() {
     // Fase 6: kernels disponibles en los repositorios configurados del sistema
     if (utils::commandExists("xbps-query")) {
         std::string repoOutput;
-        repoOutput += utils::exec("xbps-query -Rs linux");
-        repoOutput += "\n" + utils::exec("xbps-query -Rs kernel");
-        repoOutput += "\n" + utils::exec("xbps-query -Rs neko");
+        repoOutput += utils::execProgram("xbps-query", {"-Rs", "linux"});
+        repoOutput += "\n" + utils::execProgram("xbps-query", {"-Rs", "kernel"});
+        repoOutput += "\n" + utils::execProgram("xbps-query", {"-Rs", "neko"});
         std::vector<std::string> repoLines = utils::split(repoOutput, '\n');
 
         for (const auto &line_raw : repoLines) {

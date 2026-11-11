@@ -153,6 +153,11 @@ execute_action() {
             validate_version "$TARGET_VER"
             echo "Configurando kernel por defecto en GRUB: $TARGET_VER"
 
+            if [ ! -f /etc/default/grub ]; then
+                echo "Error: No se encontró /etc/default/grub." >&2
+                return 1
+            fi
+
             # 1. Asegurar GRUB_DEFAULT=saved en /etc/default/grub
             if grep -Eq '^#?[[:space:]]*GRUB_DEFAULT=' /etc/default/grub; then
                 sed -i -E 's/^#?[[:space:]]*GRUB_DEFAULT=.*/GRUB_DEFAULT=saved/' /etc/default/grub
@@ -178,7 +183,7 @@ execute_action() {
                         match($0, /['\''"]([^'\''"]+)['\''"]/, arr)
                         cur_sub = arr[1]
                     }
-                    /^[[:space:]]*menuentry/ && $0 ~ kver && $0 !~ /recovery/ {
+                    /^[[:space:]]*menuentry/ && index($0, kver) > 0 && $0 !~ /recovery/ {
                         match($0, /['\''"]([^'\''"]+)['\''"]/, arr)
                         if (cur_sub != "") {
                             print cur_sub ">" arr[1]
@@ -289,15 +294,19 @@ MODE="${1:-}"
 shift || true
 
 if [ "$MODE" = "--daemon" ]; then
-    NONCE="${1:-}"
+    # Mantener el pipe de comandos privado exclusivamente en FD 3; el nonce se lee
+    # por el pipe (nunca por argv en /proc/*/cmdline) y los subprocesos no heredan FD 3.
+    exec 3<&0
+    if ! IFS= read -r -u 3 NONCE; then
+        echo "Error de seguridad: Nonce de sesión ausente." >&2
+        exit 1
+    fi
+    NONCE="${NONCE%$'\r'}"
     if [[ ! "$NONCE" =~ ^[a-fA-F0-9]{16,64}$ ]]; then
         echo "Error de seguridad: Nonce de sesión inválido." >&2
         exit 1
     fi
 
-    # Mantener el pipe de comandos privado exclusivamente en FD 3; los subprocesos
-    # ejecutados no heredan acceso a FD 3 ni leen de stdin.
-    exec 3<&0
     echo "__NEKO_READY_${NONCE}__"
 
     while IFS= read -r -u 3 line; do

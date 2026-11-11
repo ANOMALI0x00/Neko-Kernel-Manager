@@ -98,9 +98,6 @@ private:
     QVariantList m_dkmsCache;
     QString m_defaultKernel;
 
-    QVariantList getKernels();
-    QVariantList getDkmsModulesInternal();
-    QString getDefaultKernelInternal();
     void setBusy(bool b);
     void setProgress(int p) { if(m_progress != p) { m_progress = p; emit progressChanged(); } }
 

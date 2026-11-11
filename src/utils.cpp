@@ -1,40 +1,37 @@
 #include "utils.hpp"
 
 #include <QProcess>
+#include <QStandardPaths>
+#include <cctype>
+#include <fstream>
 #include <sstream>
 #include <sys/stat.h>
-#include <unistd.h>
-#include <pwd.h>
 
 namespace utils {
 
-std::string exec(const std::string &cmd) {
-    QProcess process;
-    process.setProgram("sh");
-    process.setArguments({"-c", QString::fromStdString(cmd)});
-    process.setProcessChannelMode(QProcess::MergedChannels);
-    process.start();
-    process.waitForFinished(-1);
+std::string execProgram(const std::string &program,
+                        const std::vector<std::string> &args,
+                        bool mergeStderr) {
+    QStringList qargs;
+    qargs.reserve(static_cast<int>(args.size()));
+    for (const auto &a : args) {
+        qargs.append(QString::fromStdString(a));
+    }
 
-    QString output = process.readAllStandardOutput();
-    if (!output.isEmpty() && output.back() == '\n')
+    QProcess process;
+    process.setProgram(QString::fromStdString(program));
+    process.setArguments(qargs);
+    process.setProcessChannelMode(mergeStderr ? QProcess::MergedChannels : QProcess::SeparateChannels);
+    process.start();
+    if (!process.waitForFinished(-1)) {
+        return "";
+    }
+
+    QString output = QString::fromUtf8(process.readAllStandardOutput());
+    if (!output.isEmpty() && output.back() == '\n') {
         output.chop(1);
+    }
     return output.toStdString();
-}
-
-utils::CommandOutput execWithOutput(const std::string &cmd) {
-    QProcess process;
-    process.setProgram("sh");
-    process.setArguments({"-c", QString::fromStdString(cmd)});
-    process.setProcessChannelMode(QProcess::SeparateChannels);
-    process.start();
-    process.waitForFinished(-1);
-
-    utils::CommandOutput result;
-    result.stdout = process.readAllStandardOutput().toStdString();
-    result.stderr = process.readAllStandardError().toStdString();
-    result.exitCode = process.exitCode();
-    return result;
 }
 
 std::vector<std::string> split(const std::string &s, char delim) {
@@ -62,19 +59,23 @@ std::string trim(const std::string &s) {
 }
 
 bool commandExists(const std::string &cmd) {
-    QString escaped = QString::fromStdString(cmd).replace("'", "'\\''");
-    return QProcess::execute("sh", {"-c", "command -v '" + escaped + "' >/dev/null 2>&1"}) == 0;
+    const QString name = QString::fromStdString(cmd);
+    if (!QStandardPaths::findExecutable(name).isEmpty()) {
+        return true;
+    }
+    static const QStringList sbinPaths = {"/usr/local/sbin", "/usr/sbin", "/sbin"};
+    return !QStandardPaths::findExecutable(name, sbinPaths).isEmpty();
 }
 
 bool fileExists(const std::string &path) {
     struct ::stat info;
-    return (::stat(path.c_str(), &info) == 0) && (info.st_mode & S_IFREG);
+    return (::stat(path.c_str(), &info) == 0) && S_ISREG(info.st_mode);
 }
 
 bool dirExists(const std::string &path) {
     struct ::stat info;
     if (::stat(path.c_str(), &info) != 0) return false;
-    return (info.st_mode & S_IFDIR);
+    return S_ISDIR(info.st_mode);
 }
 
 bool packageInstalled(const std::string &pkgName) {
@@ -82,43 +83,35 @@ bool packageInstalled(const std::string &pkgName) {
     return QProcess::execute("xbps-query", {"-p", "pkgver", QString::fromStdString(pkgName)}) == 0;
 }
 
-std::string getRealHome() {
-    const char* sudo_user = getenv("SUDO_USER");
-    if (sudo_user && std::string(sudo_user) != "root") {
-        struct passwd* pw = getpwnam(sudo_user);
-        if (pw) return pw->pw_dir;
-    }
-    if (getuid() == 0) {
-        struct passwd* pw = getpwuid(1000);
-        if (pw) return pw->pw_dir;
-    }
-    const char* home = getenv("HOME");
-    if (home) return home;
-    struct passwd* pw = getpwuid(getuid());
-    return pw ? pw->pw_dir : "/tmp";
-}
-
 std::string detectCpuLevel() {
-    std::string flags = exec("grep -m1 flags /proc/cpuinfo");
-    bool has_v2 = flags.find("popcnt") != std::string::npos &&
-                  flags.find("sse4_1") != std::string::npos &&
-                  flags.find("sse4_2") != std::string::npos &&
-                  flags.find("ssse3") != std::string::npos;
+    std::ifstream cpuinfo("/proc/cpuinfo");
+    std::string line;
+    std::string flags;
+    while (std::getline(cpuinfo, line)) {
+        if (line.rfind("flags", 0) == 0) {
+            flags = line;
+            break;
+        }
+    }
+    const bool has_v2 = flags.find("popcnt") != std::string::npos &&
+                        flags.find("sse4_1") != std::string::npos &&
+                        flags.find("sse4_2") != std::string::npos &&
+                        flags.find("ssse3") != std::string::npos;
     if (!has_v2) return "x86-64";
-    bool has_v3 = flags.find("avx") != std::string::npos &&
-                  flags.find("avx2") != std::string::npos &&
-                  flags.find("bmi1") != std::string::npos &&
-                  flags.find("bmi2") != std::string::npos &&
-                  flags.find("f16c") != std::string::npos &&
-                  flags.find("fma") != std::string::npos &&
-                  flags.find("movbe") != std::string::npos &&
-                  flags.find("xsave") != std::string::npos;
+    const bool has_v3 = flags.find("avx") != std::string::npos &&
+                        flags.find("avx2") != std::string::npos &&
+                        flags.find("bmi1") != std::string::npos &&
+                        flags.find("bmi2") != std::string::npos &&
+                        flags.find("f16c") != std::string::npos &&
+                        flags.find("fma") != std::string::npos &&
+                        flags.find("movbe") != std::string::npos &&
+                        flags.find("xsave") != std::string::npos;
     if (!has_v3) return "x86-64-v2";
-    bool has_v4 = flags.find("avx512f") != std::string::npos &&
-                  flags.find("avx512bw") != std::string::npos &&
-                  flags.find("avx512cd") != std::string::npos &&
-                  flags.find("avx512dq") != std::string::npos &&
-                  flags.find("avx512vl") != std::string::npos;
+    const bool has_v4 = flags.find("avx512f") != std::string::npos &&
+                        flags.find("avx512bw") != std::string::npos &&
+                        flags.find("avx512cd") != std::string::npos &&
+                        flags.find("avx512dq") != std::string::npos &&
+                        flags.find("avx512vl") != std::string::npos;
     if (!has_v4) return "x86-64-v3";
     return "x86-64-v4";
 }
