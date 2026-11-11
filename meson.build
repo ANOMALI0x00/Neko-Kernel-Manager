@@ -1,5 +1,5 @@
 project('neko-kernel-manager', 'cpp',
-        version: '1.4.0',
+        version: '1.5.0',
         license: 'GPL-3.0-only',
         meson_version: '>=0.59.0',
         default_options: ['cpp_std=c++20',
@@ -44,4 +44,13 @@ install_data('neko-kernel-manager.desktop',
 install_data('Data/logo.png',
     rename: 'neko-kernel-manager.png',
     install_dir: get_option('datadir') / 'pixmaps'
+)
+
+install_data('helper/neko-kernel-helper',
+    install_dir: get_option('libexecdir') / 'neko-kernel-manager',
+    install_mode: 'rwxr-xr-x'
+)
+
+install_data('policy/org.nekovoid.NekoKernelManager.policy',
+    install_dir: get_option('datadir') / 'polkit-1' / 'actions'
 )

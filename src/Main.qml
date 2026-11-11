@@ -3,6 +3,7 @@ import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import Qt.labs.platform 1.1 as Platform
 import QtCore
+import "ui"
 
 ApplicationWindow {
     id: window
@@ -10,93 +11,13 @@ ApplicationWindow {
     visible: true
     width: 1180
     height: 780
-    minimumWidth: 840
+    minimumWidth: 860
     minimumHeight: 620
     title: qsTr("Neko Kernel Manager")
-    color: themeColors.window
+    color: ThemePalette.window
 
     property string selectedKernelName: ""
     property bool installedOnly: false
-    readonly property real textScale: Math.max(1.0, Math.min(2.0, Number(appSettings.textScale) || 1.0))
-
-    function scaledFont(baseSize) { return Math.round(baseSize * textScale) }
-
-    Settings {
-        id: appSettings
-        category: "Accessibility"
-        property real textScale: 1.0
-    }
-
-    QtObject {
-        id: themeColors
-
-        function mix(a, b, amount) {
-            return Qt.rgba(a.r + (b.r - a.r) * amount,
-                           a.g + (b.g - a.g) * amount,
-                           a.b + (b.b - a.b) * amount, 1.0)
-        }
-
-        function linearChannel(value) {
-            return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4)
-        }
-
-        function luminance(color) {
-            return 0.2126 * linearChannel(color.r)
-                 + 0.7152 * linearChannel(color.g)
-                 + 0.0722 * linearChannel(color.b)
-        }
-
-        function contrastRatio(a, b) {
-            var first = luminance(a)
-            var second = luminance(b)
-            return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05)
-        }
-
-        function readableForeground(preferred, background) {
-            if (contrastRatio(preferred, background) >= 4.5)
-                return preferred
-
-            var black = Qt.color("#000000")
-            var white = Qt.color("#ffffff")
-            var target = contrastRatio(black, background) >= contrastRatio(white, background) ? black : white
-            var low = 0.0
-            var high = 1.0
-            for (var i = 0; i < 16; ++i) {
-                var amount = (low + high) / 2
-                var candidate = mix(preferred, target, amount)
-                if (contrastRatio(candidate, background) >= 4.5)
-                    high = amount
-                else
-                    low = amount
-            }
-            return mix(preferred, target, high)
-        }
-
-        readonly property color window: theme.windowBg
-        readonly property color view: theme.viewBg
-        readonly property color surface: theme.cardBg
-        readonly property color toolbar: theme.headerbarBg
-        readonly property color popover: theme.popoverBg
-        readonly property color text: readableForeground(theme.windowFg, theme.windowBg)
-        // Keep secondary and disabled text legible across system themes.
-        // Establish hierarchy with size/weight instead of fading text.
-        readonly property color muted: readableForeground(theme.windowFg, theme.viewBg)
-        readonly property color faint: readableForeground(theme.windowFg, theme.viewBg)
-        readonly property color border: mix(theme.windowBg, theme.windowFg, 0.20)
-        readonly property color strongBorder: mix(theme.windowBg, theme.windowFg, 0.34)
-        readonly property color hover: mix(theme.cardBg, theme.windowFg, 0.08)
-        readonly property color selected: theme.accentBg
-        readonly property color selectedText: readableForeground(theme.accentFg, theme.accentBg)
-        readonly property color error: theme.errorBg
-        readonly property color errorText: readableForeground(theme.errorFg, theme.cardBg)
-        readonly property color errorBannerText: readableForeground(theme.errorFg, theme.errorBg)
-        readonly property color errorViewText: readableForeground(theme.errorFg, theme.viewBg)
-        readonly property color success: "#3a9b67"
-        readonly property color warning: "#d9822b"
-        readonly property color info: mix(theme.accentBg, theme.windowBg, 0.12)
-        readonly property color infoText: readableForeground(theme.accentFg, info)
-        readonly property color warningText: readableForeground(warning, theme.cardBg)
-    }
 
     readonly property var filteredKernels: {
         var result = bridge.kernels || []
@@ -109,6 +30,7 @@ ApplicationWindow {
                     || (kernel.version || "").toLowerCase().indexOf(query) !== -1
                     || (kernel.category || "").toLowerCase().indexOf(query) !== -1
                     || (kernel.type || "").toLowerCase().indexOf(query) !== -1
+                    || (kernel.repo || "").toLowerCase().indexOf(query) !== -1
             })
         }
         return result
@@ -127,28 +49,48 @@ ApplicationWindow {
         var count = 0
         var kernels = bridge.kernels || []
         for (var index = 0; index < kernels.length; ++index) {
-            if (kernels[index].installed)
+            if (kernels[index].installed && kernels[index].hasFiles && kernels[index].type !== "vkpurge")
                 ++count
         }
         return count
     }
 
+    function versionsMatch(a, b) {
+        if (!a || !b) return false
+        if (a === b) return true
+        function checkPrefix(full, sub) {
+            if (!full.startsWith(sub)) return false
+            if (full.length === sub.length) return true
+            var next = full.charAt(sub.length)
+            return !/[0-9a-zA-Z]/.test(next)
+        }
+        return checkPrefix(a, b) || checkPrefix(b, a)
+    }
+
     function kernelIsRunning(kernel) {
-        if (!kernel || !kernel.installed || bridge.activeKernelVersion === "")
+        if (!kernel || !kernel.installed || !bridge.activeKernelVersion)
             return false
-        return bridge.activeKernelVersion === kernel.version
-            || bridge.activeKernelVersion.indexOf(kernel.version) !== -1
-            || kernel.version.indexOf(bridge.activeKernelVersion) !== -1
-            || ((kernel.name || "").indexOf("manual") !== -1
-                && bridge.activeKernelVersion.indexOf(kernel.version) !== -1)
+        var active = bridge.activeKernelVersion.trim()
+        if (versionsMatch(active, kernel.version))
+            return true
+        var cleanName = (kernel.name || "").replace(/^(linux-?|kernel-)/, "")
+        if (cleanName.length > 0 && versionsMatch(active, cleanName))
+            return true
+        return false
     }
 
     function kernelIsDefault(kernel) {
-        if (!kernel || !kernel.installed || bridge.defaultKernel === "")
+        if (!kernel || !kernel.installed || !bridge.defaultKernel)
             return false
-        return bridge.defaultKernel === kernel.version
-            || bridge.defaultKernel.indexOf(kernel.version) !== -1
-            || bridge.defaultKernel.indexOf(kernel.name) !== -1
+        var def = bridge.defaultKernel.trim()
+        if (def === kernel.name || versionsMatch(def, kernel.version))
+            return true
+        var tokens = def.split(/\s+/)
+        for (var i = 0; i < tokens.length; ++i) {
+            if (versionsMatch(tokens[i], kernel.version) || tokens[i] === kernel.name)
+                return true
+        }
+        return false
     }
 
     function selectFirstVisibleKernel(ensureVisible) {
@@ -181,197 +123,47 @@ ApplicationWindow {
         bridge.updateDefaultKernel()
     }
 
-    component ToolbarAction: Button {
-        id: toolbarAction
-        property string symbol: ""
-        implicitWidth: 94 * window.textScale
-        implicitHeight: 62 * window.textScale
-        padding: 0
-        hoverEnabled: true
-        focusPolicy: Qt.StrongFocus
-        Accessible.name: text
-
-        contentItem: Column {
-            spacing: 3
-            Text {
-                width: parent.width
-                text: toolbarAction.symbol
-                color: toolbarAction.enabled ? themeColors.text : themeColors.faint
-                font.family: "0xProto Nerd Font"
-                font.pixelSize: window.scaledFont(20)
-                horizontalAlignment: Text.AlignHCenter
-            }
-            Text {
-                width: parent.width
-                text: toolbarAction.text
-                color: toolbarAction.enabled ? themeColors.text : themeColors.faint
-                font.pixelSize: window.scaledFont(14)
-                horizontalAlignment: Text.AlignHCenter
-                elide: Text.ElideRight
-            }
-        }
-
-        background: Rectangle {
-            color: toolbarAction.down ? themeColors.border
-                  : toolbarAction.hovered ? themeColors.hover : "transparent"
-            border.color: toolbarAction.activeFocus ? themeColors.selected : "transparent"
-            border.width: toolbarAction.activeFocus ? 2 : 1
-        }
-
-        ToolTip.visible: hovered
-        ToolTip.delay: 500
-        ToolTip.text: text
-    }
-
-    component FlatButton: Button {
-        id: flatButton
-        property bool primary: false
-        property bool destructive: false
-        implicitHeight: 40 * window.textScale
-        leftPadding: 16 * window.textScale
-        rightPadding: 16 * window.textScale
-        hoverEnabled: true
-        focusPolicy: Qt.StrongFocus
-        Accessible.name: text
-
-        contentItem: Text {
-            text: flatButton.text
-            color: !flatButton.enabled ? themeColors.faint
-                 : flatButton.primary ? themeColors.selectedText
-                 : flatButton.destructive ? themeColors.errorText
-                 : themeColors.text
-            font.pixelSize: window.scaledFont(14)
-            font.weight: flatButton.primary ? Font.DemiBold : Font.Normal
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-            elide: Text.ElideRight
-        }
-
-        background: Rectangle {
-            color: !flatButton.enabled ? themeColors.hover
-                 : flatButton.primary ? (flatButton.down ? Qt.darker(themeColors.selected, 1.16)
-                                                       : flatButton.hovered ? Qt.lighter(themeColors.selected, 1.08)
-                                                                            : themeColors.selected)
-                 : flatButton.down ? themeColors.border
-                 : flatButton.hovered ? themeColors.hover : themeColors.surface
-            border.color: flatButton.activeFocus ? themeColors.selected
-                        : flatButton.destructive ? themeColors.error : themeColors.border
-            border.width: flatButton.activeFocus ? 2 : 1
-            radius: 3
-        }
-    }
-
-    menuBar: MenuBar {
-        Menu {
-            title: qsTr("File")
-            MenuItem {
-                text: qsTr("Export Logs…")
-                enabled: bridge.logs.length > 0
-                onTriggered: fileDialog.open()
-            }
-            MenuSeparator { }
-            MenuItem { text: qsTr("Close"); onTriggered: window.close() }
-        }
-        Menu {
-            title: qsTr("Edit")
-            MenuItem {
-                text: qsTr("Show Installed Kernels Only")
-                checkable: true
-                checked: window.installedOnly
-                onToggled: {
-                    window.installedOnly = checked
-                    window.selectFirstVisibleKernel(true)
-                }
-            }
-            MenuItem {
-                text: qsTr("Clear Search")
-                enabled: kernelSearch.text.length > 0
-                onTriggered: kernelSearch.clear()
-            }
-        }
-        Menu {
-            title: qsTr("View")
-            MenuItem {
-                text: qsTr("Refresh Kernels")
-                enabled: !bridge.busy
-                onTriggered: window.refreshKernels()
-            }
-            MenuItem { text: qsTr("Activity Log"); onTriggered: logDialog.open() }
-            Menu {
-                title: qsTr("Text Size (%1%)").arg(Math.round(window.textScale * 100))
-                Repeater {
-                    model: [1.0, 1.25, 1.5, 1.75, 2.0]
-                    delegate: MenuItem {
-                        required property var modelData
-                        text: qsTr("%1%").arg(Math.round(modelData * 100))
-                        checkable: true
-                        checked: Math.abs(window.textScale - modelData) < 0.01
-                        onTriggered: appSettings.textScale = modelData
-                    }
-                }
-            }
-        }
-        Menu {
-            title: qsTr("Kernel")
-            MenuItem {
-                text: qsTr("Remove Old Kernels…")
-                enabled: !bridge.busy && bridge.kernels.length > 0
-                onTriggered: purgeDialog.open()
-            }
-        }
-        Menu {
-            title: qsTr("Help")
-            MenuItem { text: qsTr("About Neko Kernel Manager"); onTriggered: aboutDialog.open() }
-        }
-
-        delegate: MenuBarItem {
-            id: menuItem
-            contentItem: Text {
-                text: menuItem.text
-                color: themeColors.text
-                font.pixelSize: window.scaledFont(14)
-                verticalAlignment: Text.AlignVCenter
-            }
-            background: Rectangle { color: menuItem.highlighted ? themeColors.hover : "transparent" }
-        }
-        background: Rectangle {
-            color: themeColors.toolbar
-            border.color: themeColors.border
-            border.width: 1
-        }
-    }
-
     Shortcut {
         sequence: "Ctrl+R"
         enabled: !bridge.busy
         onActivated: window.refreshKernels()
     }
-    Shortcut { sequence: "Ctrl+0"; onActivated: appSettings.textScale = 1.0 }
 
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
 
+        // ====================================================================
+        // GTK3 HEADERBAR (Matecito Dark)
+        // ====================================================================
         Rectangle {
+            id: headerBar
             Layout.fillWidth: true
-            Layout.preferredHeight: 74 * window.textScale
-            color: themeColors.toolbar
+            Layout.preferredHeight: 52
+            color: ThemePalette.toolbar
 
-            Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: themeColors.border }
+            Rectangle {
+                anchors.bottom: parent.bottom
+                width: parent.width
+                height: 1
+                color: ThemePalette.border
+            }
 
             RowLayout {
                 anchors.fill: parent
                 anchors.leftMargin: 12
                 anchors.rightMargin: 12
-                spacing: 2
+                spacing: 8
 
-                ToolbarAction {
+                // Left buttons
+                NekoHeaderButton {
                     symbol: "\uf021"
                     text: qsTr("Refresh")
                     enabled: !bridge.busy
                     onClicked: window.refreshKernels()
                 }
-                ToolbarAction {
+
+                NekoHeaderButton {
                     symbol: "\uf058"
                     text: qsTr("Installed")
                     checkable: true
@@ -381,7 +173,19 @@ ApplicationWindow {
                         window.selectFirstVisibleKernel(true)
                     }
                 }
-                ToolbarAction {
+
+                Item { Layout.fillWidth: true }
+
+                // Right buttons
+                NekoHeaderButton {
+                    symbol: "\uf023"
+                    text: qsTr("Unlock")
+                    visible: !bridge.authenticated
+                    enabled: !bridge.busy
+                    onClicked: bridge.startPrivilegedSession()
+                }
+
+                NekoHeaderButton {
                     symbol: "\uf1b3"
                     text: qsTr("DKMS")
                     enabled: !bridge.busy
@@ -391,48 +195,75 @@ ApplicationWindow {
                     }
                 }
 
-                Rectangle {
-                    Layout.preferredWidth: 1
-                    Layout.preferredHeight: 48
-                    Layout.leftMargin: 6
-                    Layout.rightMargin: 6
-                    color: themeColors.border
+                NekoHeaderButton {
+                    symbol: "\uf1f8"
+                    text: qsTr("Remove Old")
+                    enabled: !bridge.busy
+                    onClicked: purgeDialog.open()
                 }
 
-                ToolbarAction { symbol: "\uf15c"; text: qsTr("Logs"); onClicked: logDialog.open() }
+                NekoHeaderButton {
+                    symbol: "\uf15c"
+                    text: qsTr("Logs")
+                    onClicked: logDialog.open()
+                }
 
-                Item { Layout.fillWidth: true }
+                NekoHeaderButton {
+                    symbol: "\uf05a"
+                    text: qsTr("About")
+                    onClicked: aboutDialog.open()
+                }
             }
         }
 
+        // ====================================================================
+        // GTK3 INFOBAR (Status & Active Kernel Banner)
+        // ====================================================================
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 58 * window.textScale
-            color: bridge.statusIsError ? themeColors.error : themeColors.info
+            Layout.preferredHeight: 50
+            color: ThemePalette.surface
+
+            Rectangle {
+                anchors.bottom: parent.bottom
+                width: parent.width
+                height: 1
+                color: ThemePalette.border
+            }
+
+            // Left vertical accent stripe
+            Rectangle {
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                width: 4
+                color: bridge.statusIsError ? ThemePalette.error : ThemePalette.selected
+            }
 
             RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: 14
-                anchors.rightMargin: 12
+                anchors.leftMargin: 16
+                anchors.rightMargin: 14
                 spacing: 12
 
                 Text {
-                    text: bridge.statusIsError ? "\uf071" : "\uf05a"
-                    color: bridge.statusIsError ? themeColors.errorBannerText : themeColors.infoText
-                    font.family: "0xProto Nerd Font"
-                    font.pixelSize: window.scaledFont(19)
+                    text: bridge.statusIsError ? "\uf071" : "\uf058"
+                    color: bridge.statusIsError ? ThemePalette.error : ThemePalette.selected
+                    font.family: ThemePalette.fontIcon
+                    font.pixelSize: 18
                 }
 
                 ColumnLayout {
                     Layout.fillWidth: true
-                    spacing: 0
+                    spacing: 1
+
                     Text {
                         Layout.fillWidth: true
                         text: bridge.statusIsError
                               ? qsTr("The last kernel operation reported an error")
-                              : qsTr("Running kernel: %1").arg(bridge.activeKernelVersion || qsTr("detecting…"))
-                        color: bridge.statusIsError ? themeColors.errorBannerText : themeColors.infoText
-                        font.pixelSize: window.scaledFont(14)
+                              : qsTr("Running kernel: %1").arg(bridge.activeKernelVersion || qsTr("Detecting…"))
+                        color: ThemePalette.text
+                        font.pixelSize: 13
                         font.weight: Font.DemiBold
                         elide: Text.ElideRight
                     }
@@ -440,108 +271,158 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         text: bridge.statusMessage !== ""
                               ? bridge.statusMessage
-                              : qsTr("Select a kernel to inspect its details and available actions.")
-                        color: bridge.statusIsError ? themeColors.errorBannerText : themeColors.infoText
-                        font.pixelSize: window.scaledFont(14)
+                              : qsTr("Select a kernel below to inspect its details and actions.")
+                        color: ThemePalette.muted
+                        font.pixelSize: 11
                         elide: Text.ElideRight
                     }
                 }
 
-                FlatButton {
+                NekoButton {
                     visible: bridge.statusIsError
-                    text: bridge.statusIsError ? qsTr("View Logs") : qsTr("Refresh")
+                    text: qsTr("View Logs")
+                    destructive: true
                     onClicked: logDialog.open()
                 }
             }
         }
 
+        // ====================================================================
+        // MAIN WORKSPACE (Search + Kernel List + Details)
+        // ====================================================================
         ColumnLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.leftMargin: 10
-            Layout.rightMargin: 10
-            Layout.topMargin: 8
-            Layout.bottomMargin: 8
-            spacing: 8
+            Layout.leftMargin: 12
+            Layout.rightMargin: 12
+            Layout.topMargin: 10
+            Layout.bottomMargin: 10
+            spacing: 10
 
+            // Search & Filter header
             RowLayout {
                 Layout.fillWidth: true
-                spacing: 10
+                spacing: 12
 
                 ColumnLayout {
                     Layout.fillWidth: true
-                    spacing: 1
+                    spacing: 2
                     Text {
-                        text: qsTr("Linux kernels")
-                        color: themeColors.text
-                        font.pixelSize: window.scaledFont(17)
+                        text: qsTr("Kernels")
+                        color: ThemePalette.text
+                        font.pixelSize: 16
                         font.weight: Font.DemiBold
                     }
                     Text {
-                        text: qsTr("%1 kernels · %2 installed")
+                        text: qsTr("%1 kernels available · %2 installed")
                               .arg(bridge.kernels.length).arg(window.installedKernelCount)
-                        color: themeColors.muted
-                        font.pixelSize: window.scaledFont(14)
+                        color: ThemePalette.muted
+                        font.pixelSize: 11
                     }
                 }
 
-                TextField {
-                    id: kernelSearch
-                    Layout.preferredWidth: Math.min(320, window.width * 0.31)
-                    Layout.minimumWidth: 190
-                    implicitHeight: 36
-                    leftPadding: 10
-                    rightPadding: 10
-                    placeholderText: qsTr("Search by name, version, or type…")
-                    color: themeColors.text
-                    placeholderTextColor: themeColors.muted
-                    selectionColor: themeColors.selected
-                    selectedTextColor: themeColors.selectedText
-                    font.pixelSize: window.scaledFont(14)
-                    Accessible.name: qsTr("Search kernels")
-                    onTextChanged: window.selectFirstVisibleKernel(true)
+                // GTK3 SearchEntry
+                Rectangle {
+                    Layout.preferredWidth: Math.min(320, window.width * 0.32)
+                    Layout.minimumWidth: 200
+                    implicitHeight: 34
+                    color: ThemePalette.inputBg
+                    border.color: kernelSearch.activeFocus ? ThemePalette.selected : ThemePalette.inputBorder
+                    border.width: kernelSearch.activeFocus ? 1.5 : 1
+                    radius: ThemePalette.cornerRadius
 
-                    background: Rectangle {
-                        color: themeColors.view
-                        border.color: kernelSearch.activeFocus ? themeColors.selected : themeColors.border
-                        border.width: kernelSearch.activeFocus ? 2 : 1
-                        radius: 3
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 10
+                        anchors.rightMargin: 8
+                        spacing: 6
+
+                        Text {
+                            text: "\uf002"
+                            font.family: ThemePalette.fontIcon
+                            font.pixelSize: 13
+                            color: ThemePalette.muted
+                        }
+
+                        TextInput {
+                            id: kernelSearch
+                            Layout.fillWidth: true
+                            color: ThemePalette.text
+                            font.pixelSize: 12
+                            clip: true
+                            selectByMouse: true
+                            selectionColor: ThemePalette.selected
+                            selectedTextColor: ThemePalette.selectedText
+                            verticalAlignment: Text.AlignVCenter
+                            onTextChanged: window.selectFirstVisibleKernel(true)
+
+                            Text {
+                                anchors.fill: parent
+                                text: qsTr("Search by name or version…")
+                                color: ThemePalette.faint
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                                visible: !kernelSearch.text && !kernelSearch.activeFocus
+                            }
+                        }
+
+                        Text {
+                            visible: kernelSearch.text.length > 0
+                            text: "\uf00d"
+                            font.family: ThemePalette.fontIcon
+                            font.pixelSize: 12
+                            color: ThemePalette.muted
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: kernelSearch.clear()
+                            }
+                        }
                     }
                 }
             }
 
+            // GTK3 ListBox Frame
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                color: themeColors.view
-                border.color: themeColors.border
+                color: ThemePalette.view
+                border.color: ThemePalette.border
                 border.width: 1
+                radius: ThemePalette.cornerRadius
+                clip: true
 
                 ColumnLayout {
                     anchors.fill: parent
                     spacing: 0
 
+                    // Column Headers
                     Rectangle {
                         Layout.fillWidth: true
-                            Layout.preferredHeight: 40 * window.textScale
-                        color: themeColors.surface
-                        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: themeColors.border }
+                        Layout.preferredHeight: 36
+                        color: ThemePalette.surface
+                        Rectangle {
+                            anchors.bottom: parent.bottom
+                            width: parent.width
+                            height: 1
+                            color: ThemePalette.border
+                        }
 
                         Item {
                             id: headerColumns
                             anchors.fill: parent
-                            anchors.leftMargin: 10
-                            anchors.rightMargin: 10
+                            anchors.leftMargin: 14
+                            anchors.rightMargin: 14
 
-                            readonly property bool showType: window.width >= 980 * window.textScale
-                            readonly property bool showSize: window.width >= 900 * window.textScale
-                            readonly property bool showInstalled: window.width >= 1080 * window.textScale
-                            readonly property real statusWidth: 154 * window.textScale
-                            readonly property real gap: 12 * window.textScale
-                            readonly property real versionWidth: 150 * window.textScale
-                            readonly property real typeWidth: 118 * window.textScale
-                            readonly property real sizeWidth: 76 * window.textScale
-                            readonly property real installedWidth: 112 * window.textScale
+                            readonly property bool showType: window.width >= 960
+                            readonly property bool showSize: window.width >= 880
+                            readonly property bool showInstalled: window.width >= 1040
+                            readonly property real statusWidth: 120
+                            readonly property real gap: 12
+                            readonly property real versionWidth: 150
+                            readonly property real typeWidth: 110
+                            readonly property real sizeWidth: 76
+                            readonly property real installedWidth: 110
                             readonly property real trailingWidth: versionWidth
                                 + (showType ? gap + typeWidth : 0)
                                 + (showSize ? gap + sizeWidth : 0)
@@ -550,15 +431,16 @@ ApplicationWindow {
                             readonly property real kernelX: statusWidth + gap
                             readonly property real kernelWidth: Math.max(80, versionX - gap - kernelX)
 
-                            Text { x: 0; width: headerColumns.statusWidth; anchors.verticalCenter: parent.verticalCenter; text: qsTr("Status"); color: themeColors.muted; font.pixelSize: window.scaledFont(14); font.weight: Font.DemiBold; elide: Text.ElideRight }
-                            Text { x: headerColumns.kernelX; width: headerColumns.kernelWidth; anchors.verticalCenter: parent.verticalCenter; text: qsTr("Kernel"); color: themeColors.muted; font.pixelSize: window.scaledFont(14); font.weight: Font.DemiBold; horizontalAlignment: Text.AlignLeft; elide: Text.ElideRight }
-                            Text { x: headerColumns.versionX; width: headerColumns.versionWidth; anchors.verticalCenter: parent.verticalCenter; text: qsTr("Version"); color: themeColors.muted; font.pixelSize: window.scaledFont(14); font.weight: Font.DemiBold; elide: Text.ElideRight }
-                            Text { visible: headerColumns.showType; x: headerColumns.versionX + headerColumns.versionWidth + headerColumns.gap; width: headerColumns.typeWidth; anchors.verticalCenter: parent.verticalCenter; text: qsTr("Type"); color: themeColors.muted; font.pixelSize: window.scaledFont(14); font.weight: Font.DemiBold; elide: Text.ElideRight }
-                            Text { visible: headerColumns.showSize; x: headerColumns.versionX + headerColumns.versionWidth + headerColumns.gap + (headerColumns.showType ? headerColumns.typeWidth + headerColumns.gap : 0); width: headerColumns.sizeWidth; anchors.verticalCenter: parent.verticalCenter; text: qsTr("Size"); color: themeColors.muted; font.pixelSize: window.scaledFont(14); font.weight: Font.DemiBold; elide: Text.ElideRight }
-                            Text { visible: headerColumns.showInstalled; x: headerColumns.versionX + headerColumns.versionWidth + headerColumns.gap + (headerColumns.showType ? headerColumns.typeWidth + headerColumns.gap : 0) + (headerColumns.showSize ? headerColumns.sizeWidth + headerColumns.gap : 0); width: headerColumns.installedWidth; anchors.verticalCenter: parent.verticalCenter; text: qsTr("Installed"); color: themeColors.muted; font.pixelSize: window.scaledFont(14); font.weight: Font.DemiBold; elide: Text.ElideRight }
+                            Text { x: 0; width: headerColumns.statusWidth; anchors.verticalCenter: parent.verticalCenter; text: qsTr("Status"); color: ThemePalette.muted; font.pixelSize: 11; font.weight: Font.DemiBold; elide: Text.ElideRight }
+                            Text { x: headerColumns.kernelX; width: headerColumns.kernelWidth; anchors.verticalCenter: parent.verticalCenter; text: qsTr("Kernel"); color: ThemePalette.muted; font.pixelSize: 11; font.weight: Font.DemiBold; horizontalAlignment: Text.AlignLeft; elide: Text.ElideRight }
+                            Text { x: headerColumns.versionX; width: headerColumns.versionWidth; anchors.verticalCenter: parent.verticalCenter; text: qsTr("Version"); color: ThemePalette.muted; font.pixelSize: 11; font.weight: Font.DemiBold; elide: Text.ElideRight }
+                            Text { visible: headerColumns.showType; x: headerColumns.versionX + headerColumns.versionWidth + headerColumns.gap; width: headerColumns.typeWidth; anchors.verticalCenter: parent.verticalCenter; text: qsTr("Type"); color: ThemePalette.muted; font.pixelSize: 11; font.weight: Font.DemiBold; elide: Text.ElideRight }
+                            Text { visible: headerColumns.showSize; x: headerColumns.versionX + headerColumns.versionWidth + headerColumns.gap + (headerColumns.showType ? headerColumns.typeWidth + headerColumns.gap : 0); width: headerColumns.sizeWidth; anchors.verticalCenter: parent.verticalCenter; text: qsTr("Size"); color: ThemePalette.muted; font.pixelSize: 11; font.weight: Font.DemiBold; elide: Text.ElideRight }
+                            Text { visible: headerColumns.showInstalled; x: headerColumns.versionX + headerColumns.versionWidth + headerColumns.gap + (headerColumns.showType ? headerColumns.typeWidth + headerColumns.gap : 0) + (headerColumns.showSize ? headerColumns.sizeWidth + headerColumns.gap : 0); width: headerColumns.installedWidth; anchors.verticalCenter: parent.verticalCenter; text: qsTr("Installed"); color: ThemePalette.muted; font.pixelSize: 11; font.weight: Font.DemiBold; elide: Text.ElideRight }
                         }
                     }
 
+                    // Kernel ListView
                     Item {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
@@ -572,7 +454,7 @@ ApplicationWindow {
                             focus: true
                             keyNavigationEnabled: true
                             highlightMoveDuration: 0
-                            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                            ScrollBar.vertical: NekoScrollBar {}
                             onCurrentIndexChanged: {
                                 if (currentIndex >= 0 && currentIndex < window.filteredKernels.length)
                                     window.selectedKernelName = window.filteredKernels[currentIndex].name
@@ -581,58 +463,53 @@ ApplicationWindow {
                             delegate: ItemDelegate {
                                 id: kernelRow
                                 width: kernelList.width
-                                height: 56 * window.textScale
+                                height: 50
                                 hoverEnabled: true
                                 focusPolicy: Qt.StrongFocus
+                                Accessible.name: qsTr("Kernel %1, version %2").arg(modelData.name).arg(modelData.version)
+
                                 readonly property bool running: window.kernelIsRunning(modelData)
                                 readonly property bool defaultKernel: window.kernelIsDefault(modelData)
-                                readonly property bool selected: window.selectedKernelName === modelData.name
-                                readonly property string stateLabel: running ? qsTr("Running")
-                                                                     : defaultKernel ? qsTr("Default")
-                                                                     : modelData.installed ? qsTr("Installed")
-                                                                                           : qsTr("Available")
-                                Accessible.name: qsTr("Kernel %1, version %2, status: %3%4")
-                                    .arg(modelData.name || qsTr("Unnamed kernel"))
-                                    .arg(modelData.version || "—").arg(stateLabel)
-                                    .arg((running || defaultKernel) ? qsTr(", installed") : "")
-                                Accessible.selected: selected
+                                readonly property bool isSelected: window.selectedKernelName === modelData.name
 
                                 onClicked: {
                                     window.selectedKernelName = modelData.name
                                     kernelList.currentIndex = index
                                 }
+
                                 background: Rectangle {
-                                    color: kernelRow.selected ? themeColors.selected
-                                         : kernelRow.hovered ? themeColors.hover
-                                         : index % 2 === 0 ? themeColors.view : themeColors.surface
-                                    border.color: kernelRow.activeFocus ? themeColors.selected : "transparent"
-                                    border.width: kernelRow.activeFocus ? 2 : 0
+                                    color: kernelRow.isSelected ? ThemePalette.selected
+                                         : kernelRow.hovered ? ThemePalette.hover
+                                         : (index % 2 === 0 ? "transparent" : ThemePalette.alternateRow)
+                                    border.color: kernelRow.activeFocus ? ThemePalette.selected : "transparent"
+                                    border.width: kernelRow.activeFocus ? 1.5 : 0
+
                                     Rectangle {
                                         anchors.bottom: parent.bottom
                                         width: parent.width
                                         height: 1
-                                        color: kernelRow.selected ? Qt.rgba(1, 1, 1, 0.22) : themeColors.border
+                                        color: kernelRow.isSelected ? ThemePalette.selectedRowDivider : ThemePalette.border
                                     }
                                 }
 
-                                leftPadding: 10
-                                rightPadding: 10
+                                leftPadding: 14
+                                rightPadding: 14
                                 topPadding: 0
                                 bottomPadding: 0
 
                                 contentItem: Item {
                                     id: rowColumns
-                                    implicitHeight: 56 * window.textScale
+                                    implicitHeight: 50
 
-                                    readonly property bool showType: window.width >= 980 * window.textScale
-                                    readonly property bool showSize: window.width >= 900 * window.textScale
-                                    readonly property bool showInstalled: window.width >= 1080 * window.textScale
-                                    readonly property real statusWidth: 154 * window.textScale
-                                    readonly property real gap: 12 * window.textScale
-                                    readonly property real versionWidth: 150 * window.textScale
-                                    readonly property real typeWidth: 118 * window.textScale
-                                    readonly property real sizeWidth: 76 * window.textScale
-                                    readonly property real installedWidth: 112 * window.textScale
+                                    readonly property bool showType: window.width >= 960
+                                    readonly property bool showSize: window.width >= 880
+                                    readonly property bool showInstalled: window.width >= 1040
+                                    readonly property real statusWidth: 120
+                                    readonly property real gap: 12
+                                    readonly property real versionWidth: 150
+                                    readonly property real typeWidth: 110
+                                    readonly property real sizeWidth: 76
+                                    readonly property real installedWidth: 110
                                     readonly property real trailingWidth: versionWidth
                                         + (showType ? gap + typeWidth : 0)
                                         + (showSize ? gap + sizeWidth : 0)
@@ -641,103 +518,141 @@ ApplicationWindow {
                                     readonly property real kernelX: statusWidth + gap
                                     readonly property real kernelWidth: Math.max(80, versionX - gap - kernelX)
 
-                                    Item {
+                                    // Status Badge (GTK3 Pill Style)
+                                    RowLayout {
                                         x: 0
                                         width: rowColumns.statusWidth
-                                        height: parent.height
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        spacing: 6
+
                                         Rectangle {
-                                            id: statusDot
-                                            anchors.left: parent.left
-                                            anchors.verticalCenter: parent.verticalCenter
-                                            width: 9
-                                            height: 9
-                                            radius: 5
-                                            color: kernelRow.running ? themeColors.warning
-                                                 : kernelRow.defaultKernel ? themeColors.success
-                                                 : modelData.installed ? themeColors.selected : themeColors.faint
-                                            border.color: kernelRow.selected ? themeColors.selectedText : themeColors.strongBorder
-                                            border.width: modelData.installed ? 0 : 1
-                                        }
-                                        Column {
-                                            anchors.left: statusDot.right
-                                            anchors.leftMargin: 7
-                                            anchors.right: parent.right
-                                            anchors.verticalCenter: parent.verticalCenter
-                                            spacing: 1
-                                            Text {
-                                                text: kernelRow.stateLabel
-                                                color: kernelRow.selected ? themeColors.selectedText : themeColors.text
-                                                font.pixelSize: window.scaledFont(14)
-                                                font.weight: (kernelRow.running || kernelRow.defaultKernel) ? Font.DemiBold : Font.Normal
-                                                elide: Text.ElideRight
-                                            }
-                                            Text {
-                                                visible: kernelRow.running || kernelRow.defaultKernel
-                                                text: qsTr("Installed")
-                                                color: kernelRow.selected ? themeColors.selectedText : themeColors.muted
-                                                font.pixelSize: window.scaledFont(13)
-                                                elide: Text.ElideRight
+                                            id: statusPill
+                                            readonly property bool isOrphan: modelData.type === "vkpurge"
+                                            readonly property bool isManual: modelData.type === "manual"
+                                            readonly property bool isNoFiles: modelData.installed && !modelData.hasFiles && !isOrphan
+                                            implicitHeight: 22
+                                            implicitWidth: statusText.implicitWidth + 16
+                                            radius: 11
+                                            color: kernelRow.isSelected ? ThemePalette.selectedRowPillBg
+                                                 : kernelRow.running ? ThemePalette.warningSubtle
+                                                 : kernelRow.defaultKernel ? ThemePalette.selectedPillBg
+                                                 : isOrphan ? ThemePalette.errorSubtle
+                                                 : modelData.installed ? ThemePalette.installedSubtle
+                                                 : "transparent"
+                                            border.color: kernelRow.isSelected ? ThemePalette.selectedRowBorder
+                                                        : kernelRow.running ? ThemePalette.warning
+                                                        : kernelRow.defaultKernel ? ThemePalette.selected
+                                                        : isOrphan ? ThemePalette.error
+                                                        : modelData.installed ? ThemePalette.strongBorder
+                                                        : "transparent"
+                                            border.width: 1
+
+                                            RowLayout {
+                                                anchors.centerIn: parent
+                                                spacing: 5
+                                                Rectangle {
+                                                    width: 6
+                                                    height: 6
+                                                    radius: 3
+                                                    color: kernelRow.isSelected ? ThemePalette.selectedText
+                                                         : kernelRow.running ? ThemePalette.warning
+                                                         : kernelRow.defaultKernel ? ThemePalette.selected
+                                                         : statusPill.isOrphan ? ThemePalette.error
+                                                         : statusPill.isNoFiles ? ThemePalette.muted
+                                                         : modelData.installed ? ThemePalette.text
+                                                         : ThemePalette.faint
+                                                }
+                                                Text {
+                                                    id: statusText
+                                                    text: kernelRow.running ? qsTr("Running")
+                                                         : kernelRow.defaultKernel ? qsTr("Default")
+                                                         : statusPill.isOrphan ? qsTr("Orphan")
+                                                         : statusPill.isManual ? qsTr("Manual")
+                                                         : statusPill.isNoFiles ? qsTr("Meta")
+                                                         : modelData.installed ? qsTr("Installed")
+                                                         : qsTr("Available")
+                                                    color: kernelRow.isSelected ? ThemePalette.selectedText
+                                                         : kernelRow.running ? ThemePalette.warning
+                                                         : kernelRow.defaultKernel ? ThemePalette.selected
+                                                         : statusPill.isOrphan ? ThemePalette.error
+                                                         : statusPill.isNoFiles ? ThemePalette.muted
+                                                         : modelData.installed ? ThemePalette.text
+                                                         : ThemePalette.muted
+                                                    font.pixelSize: 11
+                                                    font.weight: (kernelRow.running || kernelRow.defaultKernel || statusPill.isOrphan) ? Font.DemiBold : Font.Normal
+                                                }
                                             }
                                         }
                                     }
+
+                                    // Kernel Name
                                     Text {
                                         x: rowColumns.kernelX
                                         width: rowColumns.kernelWidth
                                         anchors.verticalCenter: parent.verticalCenter
                                         text: modelData.name || qsTr("Unnamed kernel")
-                                        color: kernelRow.selected ? themeColors.selectedText : themeColors.text
-                                        font.pixelSize: window.scaledFont(14)
+                                        color: kernelRow.isSelected ? ThemePalette.selectedText : ThemePalette.text
+                                        font.pixelSize: 13
                                         font.weight: Font.DemiBold
                                         horizontalAlignment: Text.AlignLeft
                                         elide: Text.ElideRight
                                     }
+
+                                    // Version
                                     Text {
                                         x: rowColumns.versionX
                                         width: rowColumns.versionWidth
                                         anchors.verticalCenter: parent.verticalCenter
                                         text: modelData.version || "—"
-                                        color: kernelRow.selected ? themeColors.selectedText : themeColors.text
-                                        font.pixelSize: window.scaledFont(13)
+                                        color: kernelRow.isSelected ? ThemePalette.selectedText : ThemePalette.text
+                                        font.pixelSize: 12
                                         elide: Text.ElideRight
                                     }
+
+                                    // Type / Category
                                     Text {
                                         visible: rowColumns.showType
                                         x: rowColumns.versionX + rowColumns.versionWidth + rowColumns.gap
                                         width: rowColumns.typeWidth
                                         anchors.verticalCenter: parent.verticalCenter
                                         text: modelData.category || modelData.type || "—"
-                                        color: kernelRow.selected ? themeColors.selectedText : themeColors.muted
-                                        font.pixelSize: window.scaledFont(13)
+                                        color: kernelRow.isSelected ? ThemePalette.selectedText : ThemePalette.muted
+                                        font.pixelSize: 12
                                         elide: Text.ElideRight
                                     }
+
+                                    // Size
                                     Text {
                                         visible: rowColumns.showSize
                                         x: rowColumns.versionX + rowColumns.versionWidth + rowColumns.gap + (rowColumns.showType ? rowColumns.typeWidth + rowColumns.gap : 0)
                                         width: rowColumns.sizeWidth
                                         anchors.verticalCenter: parent.verticalCenter
                                         text: modelData.size || "—"
-                                        color: kernelRow.selected ? themeColors.selectedText : themeColors.muted
-                                        font.pixelSize: window.scaledFont(14)
+                                        color: kernelRow.isSelected ? ThemePalette.selectedText : ThemePalette.muted
+                                        font.pixelSize: 12
                                         elide: Text.ElideRight
                                     }
+
+                                    // Installed Date
                                     Text {
                                         visible: rowColumns.showInstalled
                                         x: rowColumns.versionX + rowColumns.versionWidth + rowColumns.gap + (rowColumns.showType ? rowColumns.typeWidth + rowColumns.gap : 0) + (rowColumns.showSize ? rowColumns.sizeWidth + rowColumns.gap : 0)
                                         width: rowColumns.installedWidth
                                         anchors.verticalCenter: parent.verticalCenter
                                         text: modelData.installDate || (modelData.installed ? qsTr("Installed") : "—")
-                                        color: kernelRow.selected ? themeColors.selectedText : themeColors.muted
-                                        font.pixelSize: window.scaledFont(14)
+                                        color: kernelRow.isSelected ? ThemePalette.selectedText : ThemePalette.muted
+                                        font.pixelSize: 12
                                         elide: Text.ElideRight
                                     }
                                 }
                             }
                         }
 
+                        // Empty State Placeholder
                         ColumnLayout {
                             anchors.centerIn: parent
                             width: Math.min(430, parent.width - 48)
-                            spacing: 9
+                            spacing: 10
                             visible: kernelList.count === 0
 
                             BusyIndicator {
@@ -750,10 +665,10 @@ ApplicationWindow {
                                 text: bridge.busy ? qsTr("Loading kernels…")
                                       : bridge.statusIsError ? qsTr("Kernels could not be loaded")
                                       : kernelSearch.text.trim().length > 0 ? qsTr("No matching kernels")
-                                      : window.installedOnly ? qsTr("No installed kernels are visible")
-                                                             : qsTr("No kernels were found")
-                                color: themeColors.text
-                                font.pixelSize: window.scaledFont(16)
+                                      : window.installedOnly ? qsTr("No installed kernels found")
+                                      : qsTr("No kernels were found")
+                                color: ThemePalette.text
+                                font.pixelSize: 15
                                 font.weight: Font.DemiBold
                                 horizontalAlignment: Text.AlignHCenter
                                 wrapMode: Text.WordWrap
@@ -761,19 +676,19 @@ ApplicationWindow {
                             Text {
                                 Layout.fillWidth: true
                                 text: bridge.busy ? qsTr("Querying installed packages and Void repositories.")
-                                      : bridge.statusIsError ? (bridge.statusMessage || qsTr("Open the logs for details, then try again."))
-                                      : kernelSearch.text.trim().length > 0 ? qsTr("Clear the search or try a shorter version number.")
-                                                                          : qsTr("Refresh the list to scan the system again.")
-                                color: themeColors.muted
-                                font.pixelSize: window.scaledFont(14)
+                                      : bridge.statusIsError ? (bridge.statusMessage || qsTr("Open the activity log for details."))
+                                      : kernelSearch.text.trim().length > 0 ? qsTr("Clear the search or try a different term.")
+                                                                           : qsTr("Refresh the list to scan the system again.")
+                                color: ThemePalette.muted
+                                font.pixelSize: 12
                                 horizontalAlignment: Text.AlignHCenter
                                 wrapMode: Text.WordWrap
                             }
-                            FlatButton {
+                            NekoButton {
                                 Layout.alignment: Qt.AlignHCenter
                                 visible: !bridge.busy
                                 text: kernelSearch.text.trim().length > 0 ? qsTr("Clear Search") : qsTr("Retry")
-                                primary: bridge.statusIsError
+                                suggested: bridge.statusIsError
                                 onClicked: {
                                     if (kernelSearch.text.trim().length > 0)
                                         kernelSearch.clear()
@@ -786,54 +701,103 @@ ApplicationWindow {
                 }
             }
 
+            // ================================================================
+            // GTK3 NOTEBOOK (Detail & Action Panel)
+            // ================================================================
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 190 * window.textScale
-                color: themeColors.surface
-                border.color: themeColors.border
+                Layout.preferredHeight: 185
+                color: ThemePalette.surface
+                border.color: ThemePalette.border
                 border.width: 1
+                radius: ThemePalette.cornerRadius
 
                 ColumnLayout {
                     anchors.fill: parent
                     spacing: 0
 
+                    // GTK3 Tabs
                     TabBar {
                         id: detailTabs
+                        objectName: "detailTabs"
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 38 * window.textScale
+                        Layout.preferredHeight: 38
                         background: Rectangle {
-                            color: themeColors.surface
-                            Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: themeColors.border }
+                            color: ThemePalette.surface
+                            Rectangle {
+                                anchors.bottom: parent.bottom
+                                width: parent.width
+                                height: 1
+                                color: ThemePalette.border
+                            }
                         }
 
                         TabButton {
                             id: detailsTab
                             text: qsTr("Details")
-                            width: 100 * window.textScale
-                            contentItem: Text { text: detailsTab.text; color: detailsTab.checked ? themeColors.text : themeColors.muted; font.pixelSize: window.scaledFont(14); horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                            width: 105
+                            contentItem: Text {
+                                text: detailsTab.text
+                                color: detailsTab.checked ? ThemePalette.text : ThemePalette.muted
+                                font.pixelSize: 12
+                                font.weight: detailsTab.checked ? Font.DemiBold : Font.Normal
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                            }
                             background: Rectangle {
-                                color: detailsTab.hovered ? themeColors.hover : "transparent"
-                                Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: detailsTab.checked ? 2 : 0; color: themeColors.selected }
+                                color: detailsTab.hovered ? ThemePalette.hover : "transparent"
+                                Rectangle {
+                                    anchors.bottom: parent.bottom
+                                    width: parent.width
+                                    height: detailsTab.checked ? 2.5 : 0
+                                    color: ThemePalette.selected
+                                }
                             }
                         }
+
                         TabButton {
                             id: systemTab
                             text: qsTr("System")
-                            width: 100 * window.textScale
-                            contentItem: Text { text: systemTab.text; color: systemTab.checked ? themeColors.text : themeColors.muted; font.pixelSize: window.scaledFont(14); horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                            width: 105
+                            contentItem: Text {
+                                text: systemTab.text
+                                color: systemTab.checked ? ThemePalette.text : ThemePalette.muted
+                                font.pixelSize: 12
+                                font.weight: systemTab.checked ? Font.DemiBold : Font.Normal
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                            }
                             background: Rectangle {
-                                color: systemTab.hovered ? themeColors.hover : "transparent"
-                                Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: systemTab.checked ? 2 : 0; color: themeColors.selected }
+                                color: systemTab.hovered ? ThemePalette.hover : "transparent"
+                                Rectangle {
+                                    anchors.bottom: parent.bottom
+                                    width: parent.width
+                                    height: systemTab.checked ? 2.5 : 0
+                                    color: ThemePalette.selected
+                                }
                             }
                         }
+
                         TabButton {
                             id: activityTab
                             text: qsTr("Activity")
-                            width: 100 * window.textScale
-                            contentItem: Text { text: activityTab.text; color: activityTab.checked ? themeColors.text : themeColors.muted; font.pixelSize: window.scaledFont(14); horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                            width: 105
+                            contentItem: Text {
+                                text: activityTab.text
+                                color: activityTab.checked ? ThemePalette.text : ThemePalette.muted
+                                font.pixelSize: 12
+                                font.weight: activityTab.checked ? Font.DemiBold : Font.Normal
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                            }
                             background: Rectangle {
-                                color: activityTab.hovered ? themeColors.hover : "transparent"
-                                Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: activityTab.checked ? 2 : 0; color: themeColors.selected }
+                                color: activityTab.hovered ? ThemePalette.hover : "transparent"
+                                Rectangle {
+                                    anchors.bottom: parent.bottom
+                                    width: parent.width
+                                    height: activityTab.checked ? 2.5 : 0
+                                    color: ThemePalette.selected
+                                }
                             }
                         }
                     }
@@ -843,69 +807,93 @@ ApplicationWindow {
                         Layout.fillHeight: true
                         currentIndex: detailTabs.currentIndex
 
+                        // Page 1: Details & Actions
                         Item {
                             RowLayout {
                                 anchors.fill: parent
-                                anchors.margins: 12
+                                anchors.margins: 14
                                 spacing: 18
 
                                 ColumnLayout {
                                     Layout.fillWidth: true
-                                    spacing: 4
+                                    spacing: 5
+
                                     Text {
                                         Layout.fillWidth: true
                                         text: window.selectedKernel ? window.selectedKernel.name : qsTr("Select a kernel")
-                                        color: themeColors.text
-                                        font.pixelSize: window.scaledFont(16)
+                                        color: ThemePalette.text
+                                        font.pixelSize: 16
                                         font.weight: Font.DemiBold
                                         elide: Text.ElideRight
                                     }
+
                                     Text {
                                         Layout.fillWidth: true
                                         text: window.selectedKernel
-                                              ? qsTr("Version %1 · %2 · %3")
+                                              ? qsTr("Version %1 · %2 · %3 · %4")
                                                 .arg(window.selectedKernel.version || "—")
                                                 .arg(window.selectedKernel.category || window.selectedKernel.type || qsTr("Unclassified"))
                                                 .arg(window.selectedKernel.size || qsTr("Unknown size"))
-                                              : qsTr("Choose a row above to inspect its package and boot status.")
-                                        color: themeColors.muted
-                                        font.pixelSize: window.scaledFont(14)
+                                                .arg(window.selectedKernel.repo || qsTr("System"))
+                                              : qsTr("Select a kernel from the list to manage it.")
+                                        color: ThemePalette.muted
+                                        font.pixelSize: 12
                                         elide: Text.ElideRight
                                     }
+
                                     Text {
                                         Layout.fillWidth: true
                                         visible: window.selectedKernel !== null
                                         text: window.kernelIsRunning(window.selectedKernel)
                                               ? qsTr("This kernel is currently running and cannot be removed.")
                                               : window.kernelIsDefault(window.selectedKernel)
-                                                ? qsTr("This kernel is selected as the default boot entry.")
-                                                : window.selectedKernel && window.selectedKernel.installed
-                                                  ? qsTr("Installed on %1").arg(window.selectedKernel.installDate || qsTr("an unknown date"))
-                                                  : qsTr("Available from the configured Void repositories.")
-                                        color: window.kernelIsRunning(window.selectedKernel) ? themeColors.warningText : themeColors.muted
-                                        font.pixelSize: window.scaledFont(14)
+                                                ? qsTr("This kernel is selected as default boot entry (Repo: %1)").arg(window.selectedKernel.repo || qsTr("System"))
+                                                : window.selectedKernel && window.selectedKernel.type === "vkpurge"
+                                                  ? qsTr("Obsolete kernel left behind after updates (tracked by vkpurge). Recommended to remove.")
+                                                  : window.selectedKernel && window.selectedKernel.type === "manual"
+                                                    ? qsTr("Locally compiled or manually installed kernel in /boot.")
+                                                    : window.selectedKernel && window.selectedKernel.installed && !window.selectedKernel.hasFiles
+                                                      ? qsTr("Metapackage without bootable kernel image in /boot.")
+                                                      : window.selectedKernel && window.selectedKernel.installed
+                                                        ? qsTr("Installed on %1 · Repo: %2").arg(window.selectedKernel.installDate || qsTr("an unknown date")).arg(window.selectedKernel.repo || qsTr("System"))
+                                                        : qsTr("Available from repository: %1").arg(window.selectedKernel ? (window.selectedKernel.repo || qsTr("System")) : qsTr("Void repositories"))
+                                        color: window.kernelIsRunning(window.selectedKernel) ? ThemePalette.warning
+                                             : window.kernelIsDefault(window.selectedKernel) ? ThemePalette.selected
+                                             : (window.selectedKernel && window.selectedKernel.type === "vkpurge") ? ThemePalette.error
+                                             : ThemePalette.muted
+                                        font.pixelSize: 12
                                         elide: Text.ElideRight
                                     }
                                 }
 
                                 RowLayout {
-                                    spacing: 8
-                                    FlatButton {
+                                    spacing: 10
+
+                                    NekoButton {
                                         visible: window.selectedKernel && !window.selectedKernel.installed
                                         enabled: visible && !bridge.busy
-                                        primary: true
+                                        suggested: true
                                         text: qsTr("Install")
                                         onClicked: bridge.installKernel(window.selectedKernel.name)
                                     }
-                                    FlatButton {
-                                        visible: window.selectedKernel && window.selectedKernel.installed && !window.kernelIsDefault(window.selectedKernel)
+
+                                    NekoButton {
+                                        visible: window.selectedKernel && window.selectedKernel.installed && window.selectedKernel.hasFiles && window.selectedKernel.type !== "vkpurge" && !window.kernelIsDefault(window.selectedKernel)
                                         enabled: visible && !bridge.busy
                                         text: qsTr("Set as Default")
                                         onClicked: bridge.setDefaultKernel(window.selectedKernel.version)
                                     }
-                                    FlatButton {
-                                        visible: window.selectedKernel && window.selectedKernel.installed && !window.kernelIsRunning(window.selectedKernel)
+
+                                    NekoButton {
+                                        visible: window.selectedKernel && window.selectedKernel.installed && window.selectedKernel.hasFiles && window.selectedKernel.type !== "vkpurge"
                                         enabled: visible && !bridge.busy
+                                        text: qsTr("Reconfigure")
+                                        onClicked: bridge.reconfigureKernel(window.selectedKernel.name, window.selectedKernel.type || "", window.selectedKernel.version || "")
+                                    }
+
+                                    NekoButton {
+                                        visible: window.selectedKernel && window.selectedKernel.installed && !window.kernelIsRunning(window.selectedKernel)
+                                        enabled: visible && !bridge.busy && (window.installedKernelCount > 1 || (window.selectedKernel && (window.selectedKernel.type === "vkpurge" || !window.selectedKernel.hasFiles)))
                                         destructive: true
                                         text: qsTr("Remove")
                                         onClicked: {
@@ -917,24 +905,30 @@ ApplicationWindow {
                             }
                         }
 
+                        // Page 2: System Information
                         Item {
                             GridLayout {
                                 anchors.fill: parent
                                 anchors.margins: 14
                                 columns: window.width >= 980 ? 4 : 2
                                 columnSpacing: 22
-                                rowSpacing: 8
-                                Text { text: qsTr("Running kernel"); color: themeColors.muted; font.pixelSize: 13 }
-                                Text { Layout.fillWidth: true; text: bridge.activeKernelVersion || qsTr("Detecting…"); color: themeColors.text; font.pixelSize: 14; font.weight: Font.DemiBold; elide: Text.ElideRight }
-                                Text { text: qsTr("Default kernel"); color: themeColors.muted; font.pixelSize: 13 }
-                                Text { Layout.fillWidth: true; text: bridge.defaultKernel || qsTr("Not detected"); color: themeColors.text; font.pixelSize: 14; font.weight: Font.DemiBold; elide: Text.ElideRight }
-                                Text { text: qsTr("Bootloader"); color: themeColors.muted; font.pixelSize: 13 }
-                                Text { text: bridge.detectedBootloader || "—"; color: themeColors.text; font.pixelSize: 14 }
-                                Text { text: qsTr("CPU level"); color: themeColors.muted; font.pixelSize: 13 }
-                                Text { text: bridge.detectedCpuLevel || "—"; color: themeColors.text; font.pixelSize: 14 }
+                                rowSpacing: 10
+
+                                Text { text: qsTr("Running kernel:"); color: ThemePalette.muted; font.pixelSize: 12 }
+                                Text { Layout.fillWidth: true; text: bridge.activeKernelVersion || qsTr("Detecting…"); color: ThemePalette.text; font.pixelSize: 12; font.weight: Font.DemiBold; elide: Text.ElideRight }
+
+                                Text { text: qsTr("Default kernel:"); color: ThemePalette.muted; font.pixelSize: 12 }
+                                Text { Layout.fillWidth: true; text: bridge.defaultKernel || qsTr("Not detected"); color: ThemePalette.text; font.pixelSize: 12; font.weight: Font.DemiBold; elide: Text.ElideRight }
+
+                                Text { text: qsTr("Bootloader:"); color: ThemePalette.muted; font.pixelSize: 12 }
+                                Text { text: bridge.detectedBootloader || "—"; color: ThemePalette.text; font.pixelSize: 12 }
+
+                                Text { text: qsTr("CPU instruction level:"); color: ThemePalette.muted; font.pixelSize: 12 }
+                                Text { text: bridge.detectedCpuLevel || "—"; color: ThemePalette.text; font.pixelSize: 12 }
                             }
                         }
 
+                        // Page 3: Activity Log Preview
                         Item {
                             ColumnLayout {
                                 anchors.fill: parent
@@ -945,30 +939,50 @@ ApplicationWindow {
                                     Layout.fillWidth: true
                                     Text {
                                         Layout.fillWidth: true
-                                        text: bridge.statusMessage || qsTr("No operation has been reported yet.")
-                                        color: bridge.statusIsError ? themeColors.errorViewText : themeColors.text
-                                        font.pixelSize: window.scaledFont(13)
+                                        text: bridge.statusMessage || qsTr("No operation reported yet.")
+                                        color: bridge.statusIsError ? ThemePalette.error : ThemePalette.text
+                                        font.pixelSize: 12
                                         elide: Text.ElideRight
                                     }
-                                    FlatButton { text: qsTr("Open Full Log"); onClicked: logDialog.open() }
+                                    NekoButton {
+                                        text: qsTr("Open Full Log")
+                                        onClicked: logDialog.open()
+                                    }
                                 }
 
                                 Rectangle {
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
-                                    color: themeColors.view
-                                    border.color: themeColors.border
+                                    color: ThemePalette.inputBg
+                                    border.color: ThemePalette.border
                                     border.width: 1
-                                    Text {
+                                    radius: ThemePalette.cornerRadius
+                                    clip: true
+
+                                    ScrollView {
+                                        id: tabLogScroll
                                         anchors.fill: parent
-                                        anchors.margins: 8
-                                        text: bridge.logs.length > 0 ? bridge.logs : qsTr("The activity log is empty.")
-                                        color: themeColors.muted
-                                        font.family: "0xProto Nerd Font Mono"
-                                        font.pixelSize: window.scaledFont(13)
-                                        textFormat: Text.PlainText
-                                        wrapMode: Text.WrapAnywhere
-                                        elide: Text.ElideRight
+                                        clip: true
+                                        ScrollBar.vertical: NekoScrollBar {}
+                                        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+
+                                        TextArea {
+                                            width: tabLogScroll.availableWidth
+                                            text: bridge.logs.length > 0 ? bridge.logs : qsTr("The activity log is empty.")
+                                            readOnly: true
+                                            selectByMouse: true
+                                            color: ThemePalette.muted
+                                            selectionColor: ThemePalette.selected
+                                            selectedTextColor: ThemePalette.selectedText
+                                            font.family: ThemePalette.fontMono
+                                            font.pixelSize: 11
+                                            textFormat: TextEdit.RichText
+                                            wrapMode: TextEdit.Wrap
+                                            padding: 8
+                                            topInset: 0
+                                            bottomInset: 0
+                                            background: null
+                                        }
                                     }
                                 }
                             }
@@ -978,183 +992,331 @@ ApplicationWindow {
             }
         }
 
+        // ====================================================================
+        // GTK3 STATUSBAR / PROGRESS
+        // ====================================================================
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: (bridge.busy || bridge.progress > 0 ? 38 : 32) * window.textScale
-            color: themeColors.toolbar
-            Rectangle { anchors.top: parent.top; width: parent.width; height: 1; color: themeColors.border }
+            Layout.preferredHeight: bridge.busy || bridge.progress > 0 ? 34 : 28
+            color: ThemePalette.toolbar
+
+            Rectangle {
+                anchors.top: parent.top
+                width: parent.width
+                height: 1
+                color: ThemePalette.border
+            }
+
             Rectangle {
                 anchors.top: parent.top
                 anchors.left: parent.left
-                height: 3
+                height: 2.5
                 width: parent.width * Math.max(0, Math.min(100, bridge.progress)) / 100
                 visible: bridge.busy || bridge.progress > 0
-                color: themeColors.selected
+                color: ThemePalette.selected
                 Behavior on width { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
             }
+
             RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: 10
-                anchors.rightMargin: 10
-                anchors.topMargin: bridge.busy || bridge.progress > 0 ? 4 : 0
+                anchors.leftMargin: 12
+                anchors.rightMargin: 12
                 spacing: 8
-                Text { text: bridge.busy ? qsTr("Working…") : qsTr("Ready"); color: bridge.busy ? themeColors.selected : themeColors.muted; font.pixelSize: 13; font.weight: Font.DemiBold }
-                Text { Layout.fillWidth: true; text: qsTr("%1 kernels shown").arg(window.filteredKernels.length); color: themeColors.muted; font.pixelSize: 13 }
-                Text { text: qsTr("Neko Kernel Manager %1").arg(Qt.application.version); color: themeColors.muted; font.pixelSize: 13 }
+
+                Text {
+                    text: bridge.busy ? qsTr("Working…") : qsTr("Ready")
+                    color: bridge.busy ? ThemePalette.selected : ThemePalette.muted
+                    font.pixelSize: 11
+                    font.weight: Font.DemiBold
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("%1 kernels displayed").arg(window.filteredKernels.length)
+                    color: ThemePalette.muted
+                    font.pixelSize: 11
+                }
+                Text {
+                    text: qsTr("Neko Kernel Manager %1").arg(Qt.application.version)
+                    color: ThemePalette.faint
+                    font.pixelSize: 10
+                }
             }
         }
     }
 
-    Dialog {
+    // ========================================================================
+    // MODAL DIALOGS (Matecito Dark GTK3 Style)
+    // ========================================================================
+
+    // Remove Confirmation Dialog
+    NekoDialog {
         id: removeDialog
         property var kernelData: null
-        x: Math.round((window.width - width) / 2)
-        y: Math.round((window.height - height) / 2)
-        width: Math.min(450, window.width - 48)
-        modal: true
-        focus: true
+        width: Math.min(480, window.width - 48)
         title: qsTr("Remove kernel")
-        onAccepted: {
-            if (kernelData)
-                bridge.removeKernel(kernelData.name, kernelData.type || "", kernelData.version || "")
-        }
-        Text {
-            width: parent.width
-            text: removeDialog.kernelData
-                  ? qsTr("Remove %1 (%2)? The running kernel is protected, but this action cannot be undone from this screen.")
-                    .arg(removeDialog.kernelData.name).arg(removeDialog.kernelData.version)
-                  : ""
-            color: themeColors.text
-            font.pixelSize: window.scaledFont(14)
-            wrapMode: Text.WordWrap
-        }
-        footer: DialogButtonBox {
-            alignment: Qt.AlignRight
-            FlatButton {
-                text: qsTr("Cancel")
-                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
-            }
-            FlatButton {
-                text: qsTr("Remove kernel")
-                destructive: true
-                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
-            }
-        }
-        background: Rectangle { color: themeColors.popover; border.color: themeColors.border; border.width: 1; radius: 4 }
-    }
+        onClosed: kernelData = null
 
-    Dialog {
-        id: purgeDialog
-        x: Math.round((window.width - width) / 2)
-        y: Math.round((window.height - height) / 2)
-        width: Math.min(450, window.width - 48)
-        modal: true
-        focus: true
-        title: qsTr("Remove old kernels")
-        onAccepted: bridge.vkpurge()
-        Text {
-            width: parent.width
-            text: qsTr("Neko will run vkpurge to remove obsolete kernel versions and reclaim disk space. The running kernel will not be removed.")
-            color: themeColors.text
-            font.pixelSize: window.scaledFont(14)
-            wrapMode: Text.WordWrap
-        }
-        footer: DialogButtonBox {
-            alignment: Qt.AlignRight
-            FlatButton {
-                text: qsTr("Cancel")
-                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
-            }
-            FlatButton {
-                text: qsTr("Purge old kernels")
-                destructive: true
-                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
-            }
-        }
-        background: Rectangle { color: themeColors.popover; border.color: themeColors.border; border.width: 1; radius: 4 }
-    }
+        contentItem: ColumnLayout {
+            spacing: 14
 
-    Dialog {
-        id: logDialog
-        x: Math.round((window.width - width) / 2)
-        y: Math.round((window.height - height) / 2)
-        width: Math.min(760, window.width - 48)
-        height: Math.min(500, window.height - 48)
-        modal: true
-        focus: true
-        title: qsTr("System Logs and Operations")
-        standardButtons: Dialog.Close
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 8
-            RowLayout {
+            Text {
                 Layout.fillWidth: true
-                Item { Layout.fillWidth: true }
-                FlatButton { text: qsTr("Export…"); enabled: bridge.logs.length > 0; onClicked: fileDialog.open() }
-                FlatButton { text: qsTr("Clear"); enabled: bridge.logs.length > 0; onClicked: bridge.clearLogs() }
+                text: {
+                    if (!removeDialog.kernelData) return ""
+                    var k = removeDialog.kernelData
+                    if (k.type === "vkpurge") {
+                        return qsTr("Are you sure you want to purge obsolete kernel files for %1?\n\nThis kernel is an unreferenced leftover tracked by vkpurge. It will be cleanly removed from /boot.")
+                            .arg(k.version)
+                    }
+                    if (k.type === "manual") {
+                        return qsTr("Are you sure you want to remove the manual kernel %1?\n\nCorresponding files in /boot and /lib/modules will be deleted and the GRUB boot menu will be updated.")
+                            .arg(k.version)
+                    }
+                    return qsTr("Are you sure you want to remove %1 (%2)?\n\nThe currently running kernel is protected, but this action cannot be undone.")
+                        .arg(k.name).arg(k.version)
+                }
+                color: ThemePalette.text
+                font.pixelSize: 13
+                wrapMode: Text.WordWrap
             }
+
             Rectangle {
                 Layout.fillWidth: true
-                Layout.fillHeight: true
-                color: themeColors.view
-                border.color: themeColors.border
-                border.width: 1
-                ScrollView {
-                    anchors.fill: parent
-                    anchors.margins: 7
-                    clip: true
-                    TextArea {
-                        text: bridge.logs.length > 0 ? bridge.logs : qsTr("No log entries yet.")
-                        readOnly: true
-                        color: themeColors.text
-                        selectionColor: themeColors.selected
-                        selectedTextColor: themeColors.selectedText
-                        font.family: "0xProto Nerd Font Mono"
-                        font.pixelSize: window.scaledFont(14)
-                        textFormat: TextEdit.RichText
-                        wrapMode: TextEdit.Wrap
-                        background: null
+                height: 1
+                color: ThemePalette.border
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+
+                Item { Layout.fillWidth: true }
+
+                NekoButton {
+                    text: qsTr("Cancel")
+                    onClicked: removeDialog.close()
+                }
+
+                NekoButton {
+                    text: qsTr("Remove")
+                    destructive: true
+                    enabled: !bridge.busy
+                    onClicked: {
+                        var k = removeDialog.kernelData
+                        removeDialog.close()
+                        if (k) {
+                            bridge.removeKernel(k.name, k.type || "", k.version || "")
+                        }
                     }
                 }
             }
         }
-        background: Rectangle { color: themeColors.popover; border.color: themeColors.border; border.width: 1; radius: 4 }
     }
 
-    Dialog {
-        id: dkmsDialog
-        x: Math.round((window.width - width) / 2)
-        y: Math.round((window.height - height) / 2)
-        width: Math.min(780, window.width - 48)
-        height: Math.min(540, window.height - 48)
-        modal: true
-        focus: true
-        title: qsTr("DKMS Module Management")
-        standardButtons: Dialog.Close
+    // Purge Dialog
+    NekoDialog {
+        id: purgeDialog
+        property string vkList: ""
+        width: Math.min(500, window.width - 48)
+        title: qsTr("Purge old kernels (vkpurge)")
+        onAboutToShow: {
+            vkList = bridge.getVkpurgeList()
+        }
 
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 8
+        contentItem: ColumnLayout {
+            spacing: 14
+
+            Text {
+                Layout.fillWidth: true
+                text: purgeDialog.vkList.length > 0
+                      ? qsTr("Neko will run 'vkpurge rm all' to remove obsolete kernel files and reclaim disk space.\n\nThe following obsolete kernel releases were detected and will be purged:")
+                      : qsTr("Neko will run 'vkpurge rm all' to clean obsolete kernel files.\nNo unreferenced kernels are currently reported by vkpurge.")
+                color: ThemePalette.text
+                font.pixelSize: 13
+                wrapMode: Text.WordWrap
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(90, Math.max(40, purgeListText.contentHeight + 16))
+                visible: purgeDialog.vkList.length > 0
+                color: ThemePalette.inputBg
+                border.color: ThemePalette.inputBorder
+                radius: 4
+                clip: true
+
+                ScrollView {
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    clip: true
+                    ScrollBar.vertical: NekoScrollBar {}
+                    Text {
+                        id: purgeListText
+                        text: purgeDialog.vkList
+                        color: ThemePalette.warning
+                        font.family: ThemePalette.fontMono
+                        font.pixelSize: 12
+                    }
+                }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: qsTr("The currently active and installed kernels will remain safe and untouched.")
+                color: ThemePalette.muted
+                font.pixelSize: 11
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                height: 1
+                color: ThemePalette.border
+            }
+
             RowLayout {
                 Layout.fillWidth: true
-                Text {
-                    Layout.fillWidth: true
-                    text: qsTr("Install or remove out-of-tree modules for the kernels on this system.")
-                    color: themeColors.muted
-                    font.pixelSize: window.scaledFont(14)
-                    wrapMode: Text.WordWrap
+                spacing: 10
+
+                Item { Layout.fillWidth: true }
+
+                NekoButton {
+                    text: qsTr("Cancel")
+                    onClicked: purgeDialog.close()
                 }
-                FlatButton { text: qsTr("Refresh"); enabled: !bridge.busy; onClicked: bridge.updateDkmsModules() }
-                FlatButton { text: qsTr("Autoinstall"); enabled: !bridge.busy; primary: true; onClicked: bridge.autoinstallDkms() }
+
+                NekoButton {
+                    text: qsTr("Purge")
+                    destructive: true
+                    enabled: !bridge.busy && purgeDialog.vkList.length > 0
+                    onClicked: {
+                        purgeDialog.close()
+                        bridge.vkpurge()
+                    }
+                }
+            }
+        }
+    }
+
+    // Activity Log Dialog
+    NekoDialog {
+        id: logDialog
+        objectName: "logDialog"
+        width: Math.min(780, window.width - 48)
+        height: Math.min(520, window.height - 48)
+        title: qsTr("Activity Log")
+
+        contentItem: ColumnLayout {
+            spacing: 10
+
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                NekoButton {
+                    text: qsTr("Export…")
+                    enabled: bridge.logs.length > 0
+                    onClicked: fileDialog.open()
+                }
+                NekoButton {
+                    text: qsTr("Clear")
+                    enabled: bridge.logs.length > 0
+                    onClicked: bridge.clearLogs()
+                }
             }
 
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                color: themeColors.view
-                border.color: themeColors.border
+                color: ThemePalette.inputBg
+                border.color: ThemePalette.border
                 border.width: 1
+                radius: ThemePalette.cornerRadius
+                clip: true
+
+                ScrollView {
+                    id: logScroll
+                    anchors.fill: parent
+                    clip: true
+                    ScrollBar.vertical: NekoScrollBar {}
+                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+
+                    TextArea {
+                        width: logScroll.availableWidth
+                        text: bridge.logs.length > 0 ? bridge.logs : qsTr("No log entries recorded.")
+                        readOnly: true
+                        selectByMouse: true
+                        color: ThemePalette.text
+                        selectionColor: ThemePalette.selected
+                        selectedTextColor: ThemePalette.selectedText
+                        font.family: ThemePalette.fontMono
+                        font.pixelSize: 11
+                        textFormat: TextEdit.RichText
+                        wrapMode: TextEdit.Wrap
+                        padding: 10
+                        topInset: 0
+                        bottomInset: 0
+                        background: null
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                height: 1
+                color: ThemePalette.border
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                NekoButton {
+                    text: qsTr("Close")
+                    onClicked: logDialog.close()
+                }
+            }
+        }
+    }
+
+    // DKMS Dialog
+    NekoDialog {
+        id: dkmsDialog
+        objectName: "dkmsDialog"
+        width: Math.min(800, window.width - 48)
+        height: Math.min(540, window.height - 48)
+        title: qsTr("DKMS Module Management")
+
+        contentItem: ColumnLayout {
+            spacing: 10
+
+            RowLayout {
+                Layout.fillWidth: true
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTr("Manage out-of-tree DKMS modules and packages for installed kernels.")
+                    color: ThemePalette.muted
+                    font.pixelSize: 12
+                    wrapMode: Text.WordWrap
+                }
+                NekoButton {
+                    text: qsTr("Refresh")
+                    enabled: !bridge.busy
+                    onClicked: bridge.updateDkmsModules()
+                }
+                NekoButton {
+                    text: qsTr("Autoinstall")
+                    enabled: !bridge.busy
+                    suggested: true
+                    onClicked: bridge.autoinstallDkms()
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                color: ThemePalette.view
+                border.color: ThemePalette.border
+                border.width: 1
+                radius: ThemePalette.cornerRadius
+                clip: true
 
                 ListView {
                     id: dkmsList
@@ -1162,50 +1324,71 @@ ApplicationWindow {
                     clip: true
                     model: bridge.dkmsModules
                     boundsBehavior: Flickable.StopAtBounds
-                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                    ScrollBar.vertical: NekoScrollBar {}
 
                     delegate: Rectangle {
+                        readonly property bool isRepoAvailable: modelData.isDkmsPackage && !modelData.packageInstalled
+                        readonly property bool isModuleInstalled: !isRepoAvailable && modelData.status && (modelData.status === "installed" || modelData.status.indexOf("installed (") === 0)
+                        readonly property bool isRemovable: modelData.isDkmsPackage ? !!modelData.packageInstalled : isModuleInstalled
+
                         width: dkmsList.width
-                        height: 58
-                        color: index % 2 === 0 ? themeColors.view : themeColors.surface
-                        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: themeColors.border }
+                        height: 56
+                        color: index % 2 === 0 ? "transparent" : ThemePalette.alternateRow
+                        Rectangle {
+                            anchors.bottom: parent.bottom
+                            width: parent.width
+                            height: 1
+                            color: ThemePalette.border
+                        }
+
                         RowLayout {
                             anchors.fill: parent
-                            anchors.leftMargin: 10
-                            anchors.rightMargin: 10
+                            anchors.leftMargin: 12
+                            anchors.rightMargin: 12
                             spacing: 12
+
                             ColumnLayout {
                                 Layout.fillWidth: true
                                 spacing: 2
-                                Text { Layout.fillWidth: true; text: modelData.name + " " + modelData.version; color: themeColors.text; font.pixelSize: 14; font.weight: Font.DemiBold; elide: Text.ElideRight }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: modelData.name + " " + modelData.version
+                                    color: ThemePalette.text
+                                    font.pixelSize: 12
+                                    font.weight: Font.DemiBold
+                                    elide: Text.ElideRight
+                                }
                                 Text {
                                     Layout.fillWidth: true
                                     text: modelData.isDkmsPackage
-                                          ? (modelData.packageInstalled ? qsTr("XBPS package installed; not registered in DKMS") : qsTr("Available from the XBPS repository"))
+                                          ? (modelData.packageInstalled ? qsTr("XBPS package installed; not registered in DKMS") : qsTr("Available from repository"))
                                           : qsTr("Kernel %1 · %2").arg(modelData.kernel || "—").arg(modelData.arch || "—")
-                                    color: themeColors.muted
-                                    font.pixelSize: window.scaledFont(13)
+                                    color: ThemePalette.muted
+                                    font.pixelSize: 11
                                     elide: Text.ElideRight
                                 }
                             }
+
                             Text {
-                                Layout.preferredWidth: 90
+                                Layout.preferredWidth: 110
                                 text: modelData.status || qsTr("unknown")
-                                color: modelData.status === "installed" ? themeColors.success
-                                     : modelData.status === "unregistered" ? themeColors.warning : themeColors.muted
-                                font.pixelSize: window.scaledFont(13)
+                                color: isModuleInstalled ? ThemePalette.success
+                                     : (modelData.status === "unregistered" || modelData.status === "built" || modelData.status === "added") ? ThemePalette.warning
+                                     : ThemePalette.muted
+                                font.pixelSize: 11
                                 font.weight: Font.DemiBold
                                 horizontalAlignment: Text.AlignRight
                                 elide: Text.ElideRight
                             }
-                            FlatButton {
-                                readonly property bool removable: modelData.status === "installed" || modelData.status === "unregistered"
-                                text: removable ? qsTr("Remove") : qsTr("Install")
-                                destructive: removable
-                                primary: !removable
+
+                            NekoButton {
+                                text: isRemovable ? qsTr("Remove") : qsTr("Install")
+                                destructive: isRemovable
+                                suggested: !isRemovable
                                 enabled: !bridge.busy
                                 onClicked: {
-                                    if (removable)
+                                    if (isRemovable)
                                         bridge.removeDkmsModule(modelData.name, modelData.version, modelData.kernel)
                                     else
                                         bridge.installDkmsModule(modelData.name, modelData.version, modelData.kernel)
@@ -1220,40 +1403,90 @@ ApplicationWindow {
                     visible: dkmsList.count === 0
                     spacing: 8
                     BusyIndicator { Layout.alignment: Qt.AlignHCenter; visible: bridge.busy; running: visible }
-                    Text { text: bridge.busy ? qsTr("Loading DKMS modules…") : qsTr("No DKMS modules were found"); color: themeColors.text; font.pixelSize: 14 }
+                    Text { text: bridge.busy ? qsTr("Loading DKMS modules…") : qsTr("No DKMS modules found"); color: ThemePalette.text; font.pixelSize: 13 }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                height: 1
+                color: ThemePalette.border
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                NekoButton {
+                    text: qsTr("Close")
+                    onClicked: dkmsDialog.close()
                 }
             }
         }
-        background: Rectangle { color: themeColors.popover; border.color: themeColors.border; border.width: 1; radius: 4 }
     }
 
-    Dialog {
+    // About Dialog
+    NekoDialog {
         id: aboutDialog
-        x: Math.round((window.width - width) / 2)
-        y: Math.round((window.height - height) / 2)
-        width: Math.min(430, window.width - 48)
-        modal: true
-        focus: true
+        objectName: "aboutDialog"
+        width: Math.min(440, window.width - 48)
         title: qsTr("About Neko Kernel Manager")
-        standardButtons: Dialog.Close
 
-        ColumnLayout {
-            width: parent.width
-            spacing: 10
-            Text { Layout.fillWidth: true; text: qsTr("Neko Kernel Manager"); color: themeColors.text; font.pixelSize: 18; font.weight: Font.DemiBold; horizontalAlignment: Text.AlignHCenter }
+        contentItem: ColumnLayout {
+            spacing: 12
+
+            Image {
+                source: "qrc:/neko/Data/logo.png"
+                Layout.preferredWidth: 64
+                Layout.preferredHeight: 64
+                sourceSize: Qt.size(128, 128)
+                smooth: true
+                Layout.alignment: Qt.AlignHCenter
+            }
+
             Text {
                 Layout.fillWidth: true
-                text: qsTr("A graphical manager for installing, removing, and selecting Linux kernels and DKMS modules on Void Linux.")
-                color: themeColors.muted
-                font.pixelSize: window.scaledFont(14)
+                text: qsTr("Neko Kernel Manager")
+                color: ThemePalette.text
+                font.pixelSize: 18
+                font.weight: Font.DemiBold
+                horizontalAlignment: Text.AlignHCenter
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: qsTr("Graphical manager for installing, removing, and configuring Linux kernels and DKMS modules on Void Linux.\n\nThemed with Matecito Dark (GTK3).")
+                color: ThemePalette.muted
+                font.pixelSize: 12
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
             }
-            Text { Layout.fillWidth: true; text: qsTr("Version %1 · GPL-3.0-only · Qt 6 / QML / C++").arg(Qt.application.version); color: themeColors.muted; font.pixelSize: 13; horizontalAlignment: Text.AlignHCenter }
+
+            Text {
+                Layout.fillWidth: true
+                text: qsTr("Version %1 · GPL-3.0-only · Qt 6 / QML").arg(Qt.application.version)
+                color: ThemePalette.faint
+                font.pixelSize: 11
+                horizontalAlignment: Text.AlignHCenter
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                height: 1
+                color: ThemePalette.border
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                NekoButton {
+                    text: qsTr("Close")
+                    onClicked: aboutDialog.close()
+                }
+            }
         }
-        background: Rectangle { color: themeColors.popover; border.color: themeColors.border; border.width: 1; radius: 4 }
     }
 
+    // File Save Dialog for Logs
     Platform.FileDialog {
         id: fileDialog
         title: qsTr("Save Logs")
@@ -1263,7 +1496,8 @@ ApplicationWindow {
         defaultSuffix: "txt"
         onAccepted: {
             if (fileDialog.file.toString().length > 0) {
-                var filePath = fileDialog.file.toString().replace("file://", "")
+                var rawPath = fileDialog.file.toString()
+                var filePath = decodeURIComponent(rawPath.replace(/^file:\/\//, ""))
                 bridge.exportLogs(filePath)
             }
         }

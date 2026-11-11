@@ -1,15 +1,18 @@
 #include "theme-manager.hpp"
-#include "utils.hpp"
 
-#include <QDir>
 #include <QFile>
 #include <QRegularExpression>
-#include <QDebug>  // Añadido para mensajes de depuración
 
-// Resolve a raw @define-color value string to a QColor.
-//   #rgb / #rrggbb / named  -> QColor directly
-//   rgb(...) / rgba(...)     -> parsed by hand
-//   @other_token            -> follow the reference (bounded recursion)
+QColor ThemeManager::mix(const QColor &a, const QColor &b, qreal amount) {
+    const qreal t = qBound(0.0, amount, 1.0);
+    return QColor::fromRgbF(
+        a.redF()   + (b.redF()   - a.redF())   * t,
+        a.greenF() + (b.greenF() - a.greenF()) * t,
+        a.blueF()  + (b.blueF()  - a.blueF())  * t,
+        a.alphaF() + (b.alphaF() - a.alphaF()) * t
+    );
+}
+
 static QColor parseValue(QString v, const QHash<QString, QString> &raw, int depth = 0) {
     v = v.trimmed();
     if (v.isEmpty() || depth > 16)
@@ -44,40 +47,11 @@ static QColor parseValue(QString v, const QHash<QString, QString> &raw, int dept
         return QColor();
     }
 
-    return QColor(v); // handles "#rgb", "#rrggbb" and SVG names
+    return QColor(v);
 }
 
 ThemeManager::ThemeManager(QObject *parent) : QObject(parent) {
-    m_dir = QString::fromStdString(utils::getRealHome()) + "/.config/gtk-4.0";
-    // gtk.css is where matugen / pywal / libadwaita write; noctalia.css is what
-    // gtk.css @imports for Noctalia. Later files win, matching GTK's load order.
-    m_files = { m_dir + "/gtk.css", m_dir + "/noctalia.css" };
-
     load();
-
-    // Watch the directory (catches atomic replaces) and each file we know about.
-    if (QFile::exists(m_dir))
-        m_watcher.addPath(m_dir);
-    for (const QString &f : m_files)
-        if (QFile::exists(f))
-            m_watcher.addPath(f);
-
-    connect(&m_watcher, &QFileSystemWatcher::fileChanged, this, &ThemeManager::onWatch);
-    connect(&m_watcher, &QFileSystemWatcher::directoryChanged, this, &ThemeManager::onWatch);
-}
-
-void ThemeManager::onWatch() {
-    // Editors/generators replace files atomically, which drops the watch — re-add.
-    for (const QString &f : m_files)
-        if (QFile::exists(f) && !m_watcher.files().contains(f))
-            m_watcher.addPath(f);
-    load();
-    emit changed();
-}
-
-void ThemeManager::reload() {
-    load();
-    emit changed();
 }
 
 QColor ThemeManager::get(const QString &name, const QColor &fallback) const {
@@ -87,34 +61,48 @@ QColor ThemeManager::get(const QString &name, const QColor &fallback) const {
     return fallback;
 }
 
+static bool readThemeFileBounded(const QString &path, qint64 maxBytes, QString &outText) {
+    if (!path.startsWith(QStringLiteral(":/"))) {
+        return false;
+    }
+
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text) || f.size() > maxBytes) {
+        return false;
+    }
+
+    const QByteArray data = f.read(maxBytes + 1);
+    if (data.size() > maxBytes) {
+        return false;
+    }
+    outText = QString::fromUtf8(data);
+    return true;
+}
+
 void ThemeManager::load() {
     static const QRegularExpression re(
         QStringLiteral(R"(@define-color\s+([A-Za-z0-9_\-]+)\s+([^;]+);)"));
+    static constexpr qint64 kMaxThemeBytes = 1024 * 1024;
 
-    QHash<QString, QString> raw; // token -> raw value string (later files override)
-    QString foundIn;
-
-    for (const QString &path : m_files) {
-        if (!QFile::exists(path)) {
-            continue;
-        }
-        QFile f(path);
-        if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            // Mensaje de depuración (no crítico)
-            qDebug() << "ThemeManager: Could not open" << path;
-            continue;
-        }
-        const QString text = QString::fromUtf8(f.readAll());
+    QHash<QString, QString> raw;
+    QString text;
+    if (readThemeFileBounded(QStringLiteral(":/neko/Data/themes/matecito-dark.css"), kMaxThemeBytes, text)) {
         auto it = re.globalMatch(text);
-        bool any = false;
         while (it.hasNext()) {
             const auto m = it.next();
             raw.insert(m.captured(1), m.captured(2).trimmed());
-            any = true;
         }
-        if (any)
-            foundIn = path;
     }
+
+    // Aliases comunes de tokens GTK3
+    if (raw.contains("theme_bg_color") && !raw.contains("window_bg_color"))
+        raw.insert("window_bg_color", raw.value("theme_bg_color"));
+    if (raw.contains("theme_fg_color") && !raw.contains("window_fg_color"))
+        raw.insert("window_fg_color", raw.value("theme_fg_color"));
+    if (raw.contains("theme_selected_bg_color") && !raw.contains("accent_bg_color"))
+        raw.insert("accent_bg_color", raw.value("theme_selected_bg_color"));
+    if (raw.contains("theme_selected_fg_color") && !raw.contains("accent_fg_color"))
+        raw.insert("accent_fg_color", raw.value("theme_selected_fg_color"));
 
     m_colors.clear();
     for (auto it = raw.constBegin(); it != raw.constEnd(); ++it) {
@@ -122,7 +110,4 @@ void ThemeManager::load() {
         if (c.isValid())
             m_colors.insert(it.key(), c);
     }
-
-    m_themed = !m_colors.isEmpty();
-    m_source = foundIn;
 }
