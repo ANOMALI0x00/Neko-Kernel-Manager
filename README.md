@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ANOMALI0x00/Neko-Kernel-Manager/releases"><img src="https://img.shields.io/badge/version-1.4.0-blue.svg" alt="Version 1.4.0"></a>
+  <a href="https://github.com/ANOMALI0x00/Neko-Kernel-Manager/releases"><img src="https://img.shields.io/badge/version-1.5.0-blue.svg" alt="Version 1.5.0"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-green.svg" alt="License: GPL-3.0"></a>
   <img src="https://img.shields.io/badge/platform-Void%20Linux-black.svg" alt="Platform: Void Linux">
   <img src="https://img.shields.io/badge/built%20with-C%2B%2B20%20%7C%20Qt6%20QML-41cd52.svg" alt="Built with C++20 and Qt6 QML">

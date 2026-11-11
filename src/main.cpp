@@ -22,7 +22,7 @@ int main(int argc, char *argv[]) {
 
     // El nombre de la aplicación debe coincidir con el ID del portal (neko-kernel-manager)
     QCoreApplication::setApplicationName("neko-kernel-manager");
-    QCoreApplication::setApplicationVersion("1.4.0");
+    QCoreApplication::setApplicationVersion("1.5.0");
     QCoreApplication::setOrganizationName("Neko");
     QCoreApplication::setOrganizationDomain("com.neko");
     QGuiApplication::setDesktopFileName("neko-kernel-manager");
