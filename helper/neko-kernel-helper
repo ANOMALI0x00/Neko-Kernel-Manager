@@ -181,19 +181,22 @@ execute_action() {
             if [ -n "$GRUB_CFG" ]; then
                 local FOUND
                 FOUND=$(awk -v kver="$TARGET_VER" '
-                    BEGIN { IGNORECASE=1; cur_sub="" }
-                    /^[[:space:]]*submenu/ {
-                        match($0, /['\''"]([^'\''"]+)['\''"]/, arr)
-                        cur_sub = arr[1]
-                    }
-                    /^[[:space:]]*menuentry/ && index($0, kver) > 0 && $0 !~ /recovery/ {
-                        match($0, /['\''"]([^'\''"]+)['\''"]/, arr)
-                        if (cur_sub != "") {
-                            print cur_sub ">" arr[1]
-                        } else {
-                            print arr[1]
+                    BEGIN { cur_sub="" }
+                    /^[[:space:]]*submenu[[:space:]]/ {
+                        if (match($0, /['\''"][^'\''"]+['\''"]/)) {
+                            cur_sub = substr($0, RSTART + 1, RLENGTH - 2)
                         }
-                        exit
+                    }
+                    /^[[:space:]]*menuentry[[:space:]]/ && index($0, kver) > 0 && tolower($0) !~ /recovery/ {
+                        if (match($0, /['\''"][^'\''"]+['\''"]/)) {
+                            entry = substr($0, RSTART + 1, RLENGTH - 2)
+                            if (cur_sub != "") {
+                                print cur_sub ">" entry
+                            } else {
+                                print entry
+                            }
+                            exit
+                        }
                     }
                 ' "$GRUB_CFG")
                 if [ -n "$FOUND" ]; then
@@ -273,13 +276,19 @@ execute_action() {
             ;;
 
         nvidia-dkms-install)
-            local VER="${1:-}"
+            local MODULE="${1:-}"
+            local VER="${2:-}"
+            validate_pkg_name "$MODULE"
+            if [[ "$MODULE" != nvidia* ]]; then
+                echo "Error de seguridad: Módulo NVIDIA DKMS inválido: '$MODULE'" >&2
+                return 1
+            fi
             validate_version "$VER"
-            shift || true
+            shift 2 || true
             for k in "$@"; do
                 validate_version "$k"
-                echo "Forzando instalación DKMS de NVIDIA ($VER) para kernel: $k"
-                dkms install -m nvidia -v "$VER" -k "$k" || true
+                echo "Forzando instalación DKMS de $MODULE ($VER) para kernel: $k"
+                dkms install -m "$MODULE" -v "$VER" -k "$k" || true
                 if command -v dracut >/dev/null 2>&1; then
                     dracut --force "/boot/initramfs-${k}.img" "$k" || true
                 fi

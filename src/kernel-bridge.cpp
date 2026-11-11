@@ -17,10 +17,13 @@
 #include <cctype>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <future>
 #include <sstream>
 #include <sys/stat.h>
 #include <sys/utsname.h>
 #include <unistd.h>
+#include <unordered_set>
 
 static const QString HELPER_PATH = "/usr/libexec/neko-kernel-manager/neko-kernel-helper";
 
@@ -398,24 +401,27 @@ void KernelBridge::updateKernels() {
     auto future = QtConcurrent::run([self, gen]() {
         if (!self) return;
 
-        QStringList repoLines;
-        if (utils::commandExists("xbps-query")) {
-            std::string reposOut = utils::execProgram("xbps-query", {"-L"});
-            if (!reposOut.empty()) {
-                for (const auto &line : utils::split(reposOut, '\n')) {
-                    std::string t = utils::trim(line);
-                    if (!t.empty()) {
-                        repoLines.append(QString::fromStdString(t));
-                    }
+        auto reposFuture = std::async(std::launch::async, []() -> QStringList {
+            QStringList lines;
+            if (!utils::commandExists("xbps-query")) {
+                return lines;
+            }
+            const std::string reposOut = utils::execProgram("xbps-query", {"-L"});
+            for (const auto &line : utils::split(reposOut, '\n')) {
+                const std::string t = utils::trim(line);
+                if (!t.empty()) {
+                    lines.append(QString::fromStdString(t));
                 }
             }
-        }
+            return lines;
+        });
 
         QMetaObject::invokeMethod(self, [self]() {
             if (self) self->setProgress(40);
         });
 
         auto newList = buildKernelsList();
+        const QStringList repoLines = reposFuture.get();
 
         QMetaObject::invokeMethod(self, [self, gen, repoLines, newList]() {
             if (!self) return;
@@ -862,7 +868,25 @@ static QVariantList buildDkmsModulesList() {
 
     // 2. Query installed and available DKMS packages from XBPS repositories in Void Linux
     if (utils::commandExists("xbps-query")) {
+        auto installedFuture = std::async(std::launch::async, [&parseXbpsPackage]() {
+            std::unordered_set<std::string> set;
+            const std::string out = utils::execProgram("xbps-query", {"-l"});
+            for (const auto &line : utils::split(out, '\n')) {
+                if (line.size() < 4) continue;
+                std::istringstream iss(line);
+                std::string st, full;
+                iss >> st >> full;
+                if (st != "ii" || full.empty()) continue;
+                std::string pName, pVer;
+                if (parseXbpsPackage(full, pName, pVer)) {
+                    set.insert(pName);
+                }
+            }
+            return set;
+        });
+
         std::string repoXbps = utils::execProgram("xbps-query", {"-Rs", "dkms"});
+        const std::unordered_set<std::string> installedPkgs = installedFuture.get();
         std::vector<std::string> xbpsLines = utils::split(repoXbps, '\n');
 
         std::set<std::string> processedPkgs;
@@ -883,7 +907,7 @@ static QVariantList buildDkmsModulesList() {
             if (processedPkgs.count(pkgName)) continue;
             processedPkgs.insert(pkgName);
 
-            bool isInstalled = (status == "[*]") || utils::packageInstalled(pkgName);
+            bool isInstalled = (status == "[*]") || (installedPkgs.count(pkgName) > 0);
 
             QString modName = QString::fromStdString(pkgName);
             QString normalizedPackage = normalizeDkmsName(modName);
@@ -1014,19 +1038,54 @@ void KernelBridge::installDkmsModule(const QString &name, const QString &version
             return;
         }
 
+        std::string pkgBase = name.toStdString();
+        if (pkgBase.size() > 5 && pkgBase.compare(pkgBase.size() - 5, 5, "-dkms") == 0) {
+            pkgBase.resize(pkgBase.size() - 5);
+        }
+
+        std::string nvidiaModule;
         std::string nvidiaVersion;
         std::error_code fsEc;
         const std::string srcRoot = "/usr/src";
         if (std::filesystem::exists(srcRoot, fsEc) && std::filesystem::is_directory(srcRoot, fsEc)) {
+            const std::string exactPrefix = pkgBase + "-";
+            std::filesystem::path fallbackDir;
+            std::string fallbackVer;
             for (const auto &entry : std::filesystem::directory_iterator(srcRoot, fsEc)) {
                 if (fsEc) break;
                 if (!entry.is_directory(fsEc)) continue;
                 const std::string nameStr = entry.path().filename().string();
-                if (nameStr.rfind("nvidia-", 0) == 0) {
-                    nvidiaVersion = nameStr.substr(strlen("nvidia-"));
+                if (nameStr.rfind(exactPrefix, 0) == 0) {
+                    nvidiaVersion = nameStr.substr(exactPrefix.size());
+                    fallbackDir = entry.path();
                     break;
                 }
+                if (fallbackVer.empty() && nameStr.rfind("nvidia-", 0) == 0) {
+                    fallbackVer = nameStr.substr(strlen("nvidia-"));
+                    fallbackDir = entry.path();
+                }
             }
+            if (nvidiaVersion.empty() && !fallbackVer.empty()) {
+                nvidiaVersion = fallbackVer;
+            }
+            if (!fallbackDir.empty()) {
+                std::ifstream dkmsConf(fallbackDir / "dkms.conf");
+                std::string confLine;
+                while (std::getline(dkmsConf, confLine)) {
+                    const std::string trimmed = utils::trim(confLine);
+                    if (trimmed.rfind("PACKAGE_NAME=", 0) == 0) {
+                        std::string val = trimmed.substr(strlen("PACKAGE_NAME="));
+                        if (val.size() >= 2 && ((val.front() == '"' && val.back() == '"') || (val.front() == '\'' && val.back() == '\''))) {
+                            val = val.substr(1, val.size() - 2);
+                        }
+                        nvidiaModule = utils::trim(val);
+                        break;
+                    }
+                }
+            }
+        }
+        if (nvidiaModule.empty()) {
+            nvidiaModule = pkgBase;
         }
         if (nvidiaVersion.empty()) {
             nvidiaVersion = version.toStdString();
@@ -1035,8 +1094,9 @@ void KernelBridge::installDkmsModule(const QString &name, const QString &version
                 nvidiaVersion = nvidiaVersion.substr(0, underscorePos);
             }
         }
-        if (nvidiaVersion.empty() || !isValidVersion(QString::fromStdString(nvidiaVersion))) {
-            self->appendLog("ERROR: Could not determine valid NVIDIA DKMS version.");
+        if (nvidiaModule.empty() || !isValidPkgName(QString::fromStdString(nvidiaModule)) ||
+            nvidiaVersion.empty() || !isValidVersion(QString::fromStdString(nvidiaVersion))) {
+            self->appendLog("ERROR: Could not determine valid NVIDIA DKMS module or version.");
             finishInstall(true);
             return;
         }
@@ -1051,7 +1111,11 @@ void KernelBridge::installDkmsModule(const QString &name, const QString &version
             return;
         }
 
-        QStringList dkmsArgs = {"nvidia-dkms-install", QString::fromStdString(nvidiaVersion)};
+        QStringList dkmsArgs = {
+            "nvidia-dkms-install",
+            QString::fromStdString(nvidiaModule),
+            QString::fromStdString(nvidiaVersion)
+        };
         for (const auto &entry : std::filesystem::directory_iterator(modulesRoot, fsEc)) {
             if (fsEc) break;
             if (!entry.is_directory(fsEc)) continue;
@@ -1085,7 +1149,7 @@ void KernelBridge::installDkmsModule(const QString &name, const QString &version
             }
         }
 
-        if (dkmsArgs.size() <= 2) {
+        if (dkmsArgs.size() <= 3) {
             self->appendLog("No additional kernels required forced NVIDIA DKMS install.");
             finishInstall(true);
             return;

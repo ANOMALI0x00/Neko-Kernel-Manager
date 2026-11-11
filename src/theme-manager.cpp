@@ -51,16 +51,7 @@ static QColor parseValue(QString v, const QHash<QString, QString> &raw, int dept
 }
 
 ThemeManager::ThemeManager(QObject *parent) : QObject(parent) {
-    m_files = {
-        QStringLiteral(":/neko/Data/themes/matecito-dark.css")
-    };
-
     load();
-}
-
-void ThemeManager::reload() {
-    load();
-    emit changed();
 }
 
 QColor ThemeManager::get(const QString &name, const QColor &fallback) const {
@@ -94,23 +85,12 @@ void ThemeManager::load() {
     static constexpr qint64 kMaxThemeBytes = 1024 * 1024;
 
     QHash<QString, QString> raw;
-    QString foundIn;
-
-    for (const QString &path : m_files) {
-        QString text;
-        if (!readThemeFileBounded(path, kMaxThemeBytes, text)) {
-            continue;
-        }
+    QString text;
+    if (readThemeFileBounded(QStringLiteral(":/neko/Data/themes/matecito-dark.css"), kMaxThemeBytes, text)) {
         auto it = re.globalMatch(text);
-        bool any = false;
         while (it.hasNext()) {
             const auto m = it.next();
             raw.insert(m.captured(1), m.captured(2).trimmed());
-            any = true;
-        }
-        if (any) {
-            foundIn = path;
-            break;
         }
     }
 
@@ -130,7 +110,4 @@ void ThemeManager::load() {
         if (c.isValid())
             m_colors.insert(it.key(), c);
     }
-
-    m_themed = !m_colors.isEmpty();
-    m_source = foundIn;
 }

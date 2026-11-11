@@ -4,7 +4,6 @@
 #include <QHash>
 #include <QObject>
 #include <QString>
-#include <QStringList>
 
 // Modular GTK3-compatible Theme Manager.
 // Reads @define-color tokens exclusively from the bundled Matecito Dark stylesheet
@@ -35,14 +34,10 @@ class ThemeManager : public QObject {
     Q_PROPERTY(QColor disabledBg         READ disabledBg         NOTIFY changed)
     Q_PROPERTY(QColor disabledHighlight  READ disabledHighlight  NOTIFY changed)
     Q_PROPERTY(QColor shadowColor        READ shadowColor        NOTIFY changed)
-    Q_PROPERTY(QColor sidebarBg          READ sidebarBg          NOTIFY changed)
-    Q_PROPERTY(QColor sidebarFg          READ sidebarFg          NOTIFY changed)
     Q_PROPERTY(QColor logErrorColor      READ logErrorColor      NOTIFY changed)
     Q_PROPERTY(QColor logSuccessColor    READ logSuccessColor    NOTIFY changed)
     Q_PROPERTY(QColor logWarningColor    READ logWarningColor    NOTIFY changed)
     Q_PROPERTY(QColor logInfoColor       READ logInfoColor       NOTIFY changed)
-    Q_PROPERTY(bool    themed            READ themed             NOTIFY changed)
-    Q_PROPERTY(QString source            READ source             NOTIFY changed)
 
 public:
     explicit ThemeManager(QObject *parent = nullptr);
@@ -70,16 +65,10 @@ public:
     QColor disabledBg()        const { return inputBg(); }
     QColor disabledHighlight() const { return buttonHoverBg(); }
     QColor shadowColor()       const { return mix(windowBg(), QColor("#000000"), 0.45); }
-    QColor sidebarBg()         const { return get("sidebar_bg_color",   cardBg()); }
-    QColor sidebarFg()         const { return get("sidebar_fg_color",   windowFg()); }
     QColor logErrorColor()     const { return get("log_error_color",    mix(errorBg(), QColor("#ff6b6b"), 0.55)); }
     QColor logSuccessColor()   const { return get("log_success_color",  mix(accentBg(), QColor("#6ee79a"), 0.45)); }
     QColor logWarningColor()   const { return get("log_warning_color",  mix(warningColor(), QColor("#f5e393"), 0.5)); }
     QColor logInfoColor()      const { return get("log_info_color",     mix(infoColor(), windowFg(), 0.25)); }
-    bool    themed()           const { return m_themed; }
-    QString source()           const { return m_source; }
-
-    Q_INVOKABLE void reload();
 
 signals:
     void changed();
@@ -90,7 +79,4 @@ private:
     void load();
 
     QHash<QString, QColor> m_colors;
-    bool m_themed = true;
-    QString m_source;
-    QStringList m_files;
 };
