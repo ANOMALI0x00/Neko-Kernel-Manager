@@ -1495,6 +1495,10 @@ ApplicationWindow {
                     ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
                     delegate: Rectangle {
+                        readonly property bool isRepoAvailable: modelData.isDkmsPackage && !modelData.packageInstalled
+                        readonly property bool isModuleInstalled: !isRepoAvailable && modelData.status && (modelData.status === "installed" || modelData.status.indexOf("installed (") === 0)
+                        readonly property bool isRemovable: modelData.isDkmsPackage ? !!modelData.packageInstalled : isModuleInstalled
+
                         width: dkmsList.width
                         height: 56
                         color: index % 2 === 0 ? "transparent" : Qt.rgba(211/255, 205/255, 195/255, 0.02)
@@ -1537,8 +1541,8 @@ ApplicationWindow {
                             Text {
                                 Layout.preferredWidth: 110
                                 text: modelData.status || qsTr("unknown")
-                                color: (modelData.status && modelData.status.indexOf("installed") !== -1) ? themeColors.success
-                                     : modelData.status === "unregistered" ? themeColors.warning
+                                color: isModuleInstalled ? themeColors.success
+                                     : (modelData.status === "unregistered" || modelData.status === "built" || modelData.status === "added") ? themeColors.warning
                                      : themeColors.muted
                                 font.pixelSize: 11
                                 font.weight: Font.DemiBold
@@ -1547,13 +1551,12 @@ ApplicationWindow {
                             }
 
                             GtkButton {
-                                readonly property bool removable: modelData.status && (modelData.status.indexOf("installed") !== -1 || modelData.status === "unregistered")
-                                text: removable ? qsTr("Remove") : qsTr("Install")
-                                destructive: removable
-                                suggested: !removable
+                                text: isRemovable ? qsTr("Remove") : qsTr("Install")
+                                destructive: isRemovable
+                                suggested: !isRemovable
                                 enabled: !bridge.busy
                                 onClicked: {
-                                    if (removable)
+                                    if (isRemovable)
                                         bridge.removeDkmsModule(modelData.name, modelData.version, modelData.kernel)
                                     else
                                         bridge.installDkmsModule(modelData.name, modelData.version, modelData.kernel)
