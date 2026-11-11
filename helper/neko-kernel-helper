@@ -161,7 +161,13 @@ execute_action() {
                 return 1
             fi
 
-            # 1. Asegurar GRUB_DEFAULT=saved en /etc/default/grub
+            # 1. Asegurar GRUB_DEFAULT=saved en /etc/default/grub y detectar si cambió
+            local NEED_MKCONFIG=0
+            local PREV_DEFAULT
+            PREV_DEFAULT=$(grep -E '^[[:space:]]*GRUB_DEFAULT=' /etc/default/grub | head -n 1 | cut -d= -f2- | tr -d '"'\''[:space:]' || true)
+            if [ "$PREV_DEFAULT" != "saved" ]; then
+                NEED_MKCONFIG=1
+            fi
             if grep -Eq '^#?[[:space:]]*GRUB_DEFAULT=' /etc/default/grub; then
                 sed -i -E 's/^#?[[:space:]]*GRUB_DEFAULT=.*/GRUB_DEFAULT=saved/' /etc/default/grub
             else
@@ -176,33 +182,71 @@ execute_action() {
                     break
                 fi
             done
-
-            local ACTUAL_ENTRY="$TARGET_VER"
-            if [ -n "$GRUB_CFG" ]; then
-                local FOUND
-                FOUND=$(awk -v kver="$TARGET_VER" '
-                    BEGIN { cur_sub="" }
-                    /^[[:space:]]*submenu[[:space:]]/ {
-                        if (match($0, /['\''"][^'\''"]+['\''"]/)) {
-                            cur_sub = substr($0, RSTART + 1, RLENGTH - 2)
-                        }
-                    }
-                    /^[[:space:]]*menuentry[[:space:]]/ && index($0, kver) > 0 && tolower($0) !~ /recovery/ {
-                        if (match($0, /['\''"][^'\''"]+['\''"]/)) {
-                            entry = substr($0, RSTART + 1, RLENGTH - 2)
-                            if (cur_sub != "") {
-                                print cur_sub ">" entry
-                            } else {
-                                print entry
-                            }
-                            exit
-                        }
-                    }
-                ' "$GRUB_CFG")
-                if [ -n "$FOUND" ]; then
-                    ACTUAL_ENTRY="$FOUND"
-                fi
+            if [ -z "$GRUB_CFG" ]; then
+                GRUB_CFG="/boot/grub/grub.cfg"
+                NEED_MKCONFIG=1
+            elif ! grep -q 'saved_entry' "$GRUB_CFG" 2>/dev/null; then
+                NEED_MKCONFIG=1
             fi
+
+            find_grub_entry() {
+                local cfg="$1"
+                local kver="$2"
+                [ -f "$cfg" ] || return 0
+                awk -v kver="$kver" '
+                    BEGIN { depth = 0; cur_sub = ""; sub_depth = -1 }
+                    {
+                        line = $0
+                        if (line ~ /^[[:space:]]*submenu[[:space:]]/ && match(line, /['\''"][^'\''"]+['\''"]/)) {
+                            cur_sub = substr(line, RSTART + 1, RLENGTH - 2)
+                            sub_depth = depth
+                        }
+                        if (line ~ /^[[:space:]]*menuentry[[:space:]]/ && tolower(line) !~ /recovery/ && match(line, /['\''"][^'\''"]+['\''"]/)) {
+                            entry = substr(line, RSTART + 1, RLENGTH - 2)
+                            idx = index(entry, kver)
+                            if (idx > 0) {
+                                before_ok = (idx == 1) || (substr(entry, idx - 1, 1) ~ /[^[:alnum:]._-]/)
+                                after_pos = idx + length(kver)
+                                after_ok = (after_pos > length(entry)) || (substr(entry, after_pos, 1) ~ /[^[:alnum:]._-]/)
+                                if (before_ok && after_ok) {
+                                    if (cur_sub != "") {
+                                        print cur_sub ">" entry
+                                    } else {
+                                        print entry
+                                    }
+                                    exit
+                                }
+                            }
+                        }
+                        n_open = gsub(/\{/, "{", line)
+                        n_close = gsub(/\}/, "}", line)
+                        depth += n_open - n_close
+                        if (sub_depth >= 0 && n_close > 0 && depth <= sub_depth) {
+                            cur_sub = ""
+                            sub_depth = -1
+                        }
+                    }
+                ' "$cfg"
+            }
+
+            if [ "$NEED_MKCONFIG" -eq 1 ] && command -v grub-mkconfig >/dev/null 2>&1; then
+                echo "Actualizando $GRUB_CFG para habilitar GRUB_DEFAULT=saved..."
+                grub-mkconfig -o "$GRUB_CFG"
+            fi
+
+            local FOUND=""
+            FOUND=$(find_grub_entry "$GRUB_CFG" "$TARGET_VER")
+            if [ -z "$FOUND" ] && [ "$NEED_MKCONFIG" -eq 0 ] && command -v grub-mkconfig >/dev/null 2>&1; then
+                echo "Entrada no encontrada en $GRUB_CFG; regenerando configuración de GRUB..."
+                grub-mkconfig -o "$GRUB_CFG"
+                FOUND=$(find_grub_entry "$GRUB_CFG" "$TARGET_VER")
+            fi
+
+            if [ -z "$FOUND" ]; then
+                echo "Error: No se encontró una entrada válida en $GRUB_CFG para el kernel $TARGET_VER." >&2
+                return 1
+            fi
+            local ACTUAL_ENTRY="$FOUND"
 
             # 3. Aplicar con grub-editenv
             local GRUB_ENV=""
@@ -221,12 +265,15 @@ execute_action() {
                 fi
             done
 
-            if [ -n "$GRUB_EDITENV" ]; then
-                if [ -n "$GRUB_ENV" ]; then
-                    "$GRUB_EDITENV" "$GRUB_ENV" set saved_entry="$ACTUAL_ENTRY"
-                else
-                    "$GRUB_EDITENV" - set saved_entry="$ACTUAL_ENTRY"
-                fi
+            if [ -z "$GRUB_EDITENV" ]; then
+                echo "Error: No se encontró grub-editenv ni grub2-editenv." >&2
+                return 1
+            fi
+
+            if [ -n "$GRUB_ENV" ]; then
+                "$GRUB_EDITENV" "$GRUB_ENV" set saved_entry="$ACTUAL_ENTRY"
+            else
+                "$GRUB_EDITENV" - set saved_entry="$ACTUAL_ENTRY"
             fi
             echo "Kernel por defecto establecido exitosamente a: $ACTUAL_ENTRY"
             ;;

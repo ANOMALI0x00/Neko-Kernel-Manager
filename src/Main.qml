@@ -85,8 +85,11 @@ ApplicationWindow {
         var def = bridge.defaultKernel.trim()
         if (def === kernel.name || versionsMatch(def, kernel.version))
             return true
-        if (def.indexOf(kernel.version) !== -1 || def.indexOf(kernel.name) !== -1)
-            return true
+        var tokens = def.split(/\s+/)
+        for (var i = 0; i < tokens.length; ++i) {
+            if (versionsMatch(tokens[i], kernel.version) || tokens[i] === kernel.name)
+                return true
+        }
         return false
     }
 
