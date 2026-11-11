@@ -45,3 +45,12 @@ install_data('Data/logo.png',
     rename: 'neko-kernel-manager.png',
     install_dir: get_option('datadir') / 'pixmaps'
 )
+
+install_data('helper/neko-kernel-helper',
+    install_dir: get_option('libexecdir') / 'neko-kernel-manager',
+    install_mode: 'rwxr-xr-x'
+)
+
+install_data('policy/org.nekovoid.NekoKernelManager.policy',
+    install_dir: get_option('datadir') / 'polkit-1' / 'actions'
+)
