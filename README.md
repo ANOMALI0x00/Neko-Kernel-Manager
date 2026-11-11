@@ -38,36 +38,35 @@ Whether you are running official Void kernels, custom BORE/Zen builds from Neko 
 <br>
 
 <p align="center">
-  <img src="screenshots/dkms.png" alt="Neko Kernel Manager - DKMS Manager" width="49%" />
-  <img src="screenshots/system.png" alt="Neko Kernel Manager - System Information" width="49%" />
+  <img src="screenshots/system.png" alt="Neko Kernel Manager - System Information" width="100%" />
 </p>
 
 <p align="center">
-  <em>Out-of-tree DKMS module management (left) and system hardware / bootloader information (right).</em>
+  <em>System hardware, bootloader, and active kernel information.</em>
 </p>
 
 ---
 
 ## Features
 
-### 🐧 Comprehensive Kernel Management
+### Comprehensive Kernel Management
 - **Void Linux XBPS Integration**: Seamlessly browse, install, and remove official Void kernels (`linux`, `linux-lts`, `linux-mainline`, etc.) and community repositories (Neko Void BORE/Zen, CachyOS, local repos).
 - **Intelligent Metapackage Resolution**: Automatically de-duplicates Void metapackages (`linux` vs `linux6.18`) to avoid redundant entries in the UI.
 - **`vkpurge` Orphan Detection**: Automatically detects obsolete kernel versions left behind by previous updates and safely removes them via `vkpurge`.
 - **Manual `/boot` Kernel Detection**: Accurately recognizes user-compiled kernels (`make install`), manages their boot files (`vmlinuz`, `initramfs`, `System.map`, `modules`), and handles their removal.
 - **Kernel Reconfiguration**: Re-run post-install dracut hooks and regenerate initramfs images directly with a single click.
 
-### 🛡️ Out-of-Tree DKMS Module Management
+### Out-of-Tree DKMS Module Management
 - Scan and monitor installed vs. available DKMS packages (`nvidia`, `virtualbox-ose`, `broadcom-wl`, `wireguard`, etc.).
 - Build and install modules for specific installed kernels.
 - Automated `dracut` initramfs regeneration after compiling kernel modules.
 
-### 🚀 Bootloader & System Integration
+### Bootloader & System Integration
 - **GRUB Boot Management**: Set the active default boot kernel with persistent `GRUB_DEFAULT=saved` support.
 - **Automatic Configuration Update**: Safely runs `grub-mkconfig` after any kernel installation, reconfigure, or removal.
 - **Architecture Level Detection**: Inspect CPU microarchitecture levels (`x86-64-v2`, `v3`, `v4`) and active bootloader type.
 
-### 🔒 Security & Single Authentication
+### Security & Single Authentication
 - **Dedicated Polkit Helper**: Root actions run through `/usr/libexec/neko-kernel-manager/neko-kernel-helper` guarded by PolicyKit (`org.nekovoid.NekoKernelManager.policy`).
 - **No Repeated Password Prompts**: Configured with `auth_admin_keep` so administrative privileges are retained for the session duration.
 - **Safety Locks**:
@@ -75,7 +74,7 @@ Whether you are running official Void kernels, custom BORE/Zen builds from Neko 
   - Blocks deletion if only one functional kernel remains installed.
   - Rigorous input sanitization prevents command injection and path traversal (`..`).
 
-### 🎨 Visuals & Logging
+### Visuals & Logging
 - **Matecito Dark Theme**: Consistent GTK3-styled appearance enforced across all environments.
 - **Real-Time Activity Terminal**: Monitored execution logs with RichText syntax highlighting and log export functionality.
 
