@@ -65,6 +65,7 @@ KernelBridge::KernelBridge(QObject *parent) : QObject(parent), m_verbose(false) 
 }
 
 KernelBridge::~KernelBridge() {
+    m_destroying = true;
     shutdownPrivilegedSession();
 }
 
@@ -240,21 +241,36 @@ void KernelBridge::startPrivilegedSession() {
 }
 
 void KernelBridge::shutdownPrivilegedSession() {
-    if (m_helperProcess && m_helperProcess->state() != QProcess::NotRunning) {
-        m_helperProcess->write("quit\n");
-        m_helperProcess->closeWriteChannel();
-        if (!m_helperProcess->waitForFinished(1200)) {
-            m_helperProcess->terminate();
-            if (!m_helperProcess->waitForFinished(500)) {
-                m_helperProcess->kill();
+    auto activeCb = std::move(m_activeCallback);
+    auto pendingCb = std::move(m_pendingCallback);
+    m_activeCallback = nullptr;
+    m_pendingCallback = nullptr;
+    m_pendingArgs.clear();
+    m_commandInFlight = false;
+    m_helperStarting = false;
+
+    if (m_helperProcess) {
+        m_helperProcess->disconnect(this);
+        if (m_helperProcess->state() != QProcess::NotRunning) {
+            m_helperProcess->write("quit\n");
+            m_helperProcess->closeWriteChannel();
+            if (!m_helperProcess->waitForFinished(1200)) {
+                m_helperProcess->terminate();
+                if (!m_helperProcess->waitForFinished(500)) {
+                    m_helperProcess->kill();
+                }
             }
         }
     }
+    m_sessionNonce.clear();
     if (m_authenticated) {
         m_authenticated = false;
         emit authenticatedChanged();
     }
-    m_helperStarting = false;
+    if (!m_destroying) {
+        if (activeCb) activeCb(-1);
+        if (pendingCb) pendingCb(-1);
+    }
 }
 
 void KernelBridge::sendHelperCommand(const QStringList &args, std::function<void(int)> callback) {
@@ -377,35 +393,45 @@ void KernelBridge::updateKernels() {
     setStatusMessage("Scanning installed & available kernels...", false);
     appendLog("Scanning system for installed and available kernels...");
 
-    // Registrar los repositorios del sistema activos
-    if (utils::commandExists("xbps-query")) {
-        std::string reposOut = utils::execProgram("xbps-query", {"-L"});
-        if (!reposOut.empty()) {
-            appendLog("Active system repositories configured in XBPS:");
-            for (const auto &line : utils::split(reposOut, '\n')) {
-                std::string t = utils::trim(line);
-                if (!t.empty()) {
-                    appendLog("  • " + QString::fromStdString(t));
+    const quint64 gen = ++m_kernelScanGen;
+    QPointer<KernelBridge> self(this);
+    auto future = QtConcurrent::run([self, gen]() {
+        if (!self) return;
+
+        QStringList repoLines;
+        if (utils::commandExists("xbps-query")) {
+            std::string reposOut = utils::execProgram("xbps-query", {"-L"});
+            if (!reposOut.empty()) {
+                for (const auto &line : utils::split(reposOut, '\n')) {
+                    std::string t = utils::trim(line);
+                    if (!t.empty()) {
+                        repoLines.append(QString::fromStdString(t));
+                    }
                 }
             }
         }
-    }
 
-    QPointer<KernelBridge> self(this);
-    auto future = QtConcurrent::run([self]() {
-        if (!self) return;
         QMetaObject::invokeMethod(self, [self]() {
             if (self) self->setProgress(40);
         });
 
         auto newList = buildKernelsList();
 
-        QMetaObject::invokeMethod(self, [self, newList]() {
+        QMetaObject::invokeMethod(self, [self, gen, repoLines, newList]() {
             if (!self) return;
+            self->setBusy(false);
+            if (gen != self->m_kernelScanGen) {
+                return;
+            }
+            if (!repoLines.isEmpty()) {
+                self->appendLog("Active system repositories configured in XBPS:");
+                for (const QString &repoLine : repoLines) {
+                    self->appendLog("  • " + repoLine);
+                }
+            }
             self->m_kernelsCache = newList;
             self->setProgress(100);
             self->setStatusMessage("Kernels loaded successfully", false);
-            self->setBusy(false);
             emit self->kernelsChanged();
             self->appendLog(QString("Kernel scan completed. Found %1 kernel entries:").arg(newList.size()));
             for (const auto &var : newList) {
@@ -482,9 +508,14 @@ void KernelBridge::exportLogs(const QString &filePath) {
         return;
     }
 
-    QString cleanPath = filePath;
+    QString cleanPath = filePath.trimmed();
     if (cleanPath.startsWith("file://")) {
         cleanPath = QUrl(cleanPath).toLocalFile();
+    }
+    if (cleanPath.isEmpty()) {
+        appendLog("ERROR: Invalid export file path.");
+        setStatusMessage("Failed to export logs", true);
+        return;
     }
 
     QFile file(cleanPath);
@@ -505,6 +536,13 @@ void KernelBridge::exportLogs(const QString &filePath) {
     plainLogs.replace("&#39;", "'");
     plainLogs.replace("&amp;", "&");
     out << plainLogs;
+    out.flush();
+    if (out.status() != QTextStream::Ok || !file.flush() || file.error() != QFileDevice::NoError) {
+        file.close();
+        appendLog("ERROR: Write failed while exporting logs to: " + cleanPath);
+        setStatusMessage("Failed to export logs", true);
+        return;
+    }
     file.close();
 
     appendLog("Logs exported successfully to: " + cleanPath);
@@ -887,14 +925,18 @@ void KernelBridge::updateDkmsModules() {
         appendLog("WARNING: 'xbps-query' command not found; Void DKMS package repository scan is disabled.");
     }
 
+    const quint64 gen = ++m_dkmsScanGen;
     QPointer<KernelBridge> self(this);
-    auto future = QtConcurrent::run([self]() {
+    auto future = QtConcurrent::run([self, gen]() {
         auto dkmsList = buildDkmsModulesList();
         if (!self) return;
-        QMetaObject::invokeMethod(self, [self, dkmsList]() {
+        QMetaObject::invokeMethod(self, [self, gen, dkmsList]() {
             if (!self) return;
-            self->m_dkmsCache = dkmsList;
             self->setBusy(false);
+            if (gen != self->m_dkmsScanGen) {
+                return;
+            }
+            self->m_dkmsCache = dkmsList;
             emit self->dkmsModulesChanged();
             self->appendLog(QString("DKMS scan completed. Found %1 modules/packages:").arg(dkmsList.size()));
             for (const auto &var : dkmsList) {
@@ -1026,7 +1068,10 @@ void KernelBridge::installDkmsModule(const QString &name, const QString &version
                 std::string part;
                 while (std::getline(ss, part, '.')) {
                     if (part.empty()) break;
-                    parts.push_back(std::stoi(part));
+                    bool numOk = false;
+                    const int val = QString::fromStdString(part).toInt(&numOk);
+                    if (!numOk) break;
+                    parts.push_back(val);
                 }
                 if (!parts.empty() && (parts[0] > 6 || (parts[0] == 6 && parts.size() > 1 && parts[1] >= 18))) {
                     needsForce = true;

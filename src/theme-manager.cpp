@@ -4,6 +4,9 @@
 #include <QFile>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 QColor ThemeManager::mix(const QColor &a, const QColor &b, qreal amount) {
     const qreal t = qBound(0.0, amount, 1.0);
@@ -75,6 +78,46 @@ QColor ThemeManager::get(const QString &name, const QColor &fallback) const {
     return fallback;
 }
 
+static bool readThemeFileBounded(const QString &path, qint64 maxBytes, QString &outText) {
+    if (path.isEmpty()) {
+        return false;
+    }
+
+    QFile f;
+    if (path.startsWith(QStringLiteral(":/"))) {
+        f.setFileName(path);
+        if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            return false;
+        }
+        if (f.size() > maxBytes) {
+            return false;
+        }
+    } else {
+        const QByteArray localPath = path.toLocal8Bit();
+        const int fd = ::open(localPath.constData(), O_RDONLY | O_NONBLOCK);
+        if (fd < 0) {
+            return false;
+        }
+        struct ::stat st {};
+        if (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
+            st.st_size > maxBytes) {
+            ::close(fd);
+            return false;
+        }
+        if (!f.open(fd, QIODevice::ReadOnly | QIODevice::Text, QFileDevice::AutoCloseHandle)) {
+            ::close(fd);
+            return false;
+        }
+    }
+
+    const QByteArray data = f.read(maxBytes + 1);
+    if (data.size() > maxBytes) {
+        return false;
+    }
+    outText = QString::fromUtf8(data);
+    return true;
+}
+
 void ThemeManager::load() {
     static const QRegularExpression re(
         QStringLiteral(R"(@define-color\s+([A-Za-z0-9_\-]+)\s+([^;]+);)"));
@@ -84,17 +127,10 @@ void ThemeManager::load() {
     QString foundIn;
 
     for (const QString &path : m_files) {
-        if (path.isEmpty() || !QFile::exists(path)) {
+        QString text;
+        if (!readThemeFileBounded(path, kMaxThemeBytes, text)) {
             continue;
         }
-        QFile f(path);
-        if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            continue;
-        }
-        if (f.size() > kMaxThemeBytes) {
-            continue;
-        }
-        const QString text = QString::fromUtf8(f.readAll());
         auto it = re.globalMatch(text);
         bool any = false;
         while (it.hasNext()) {

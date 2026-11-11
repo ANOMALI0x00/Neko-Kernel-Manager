@@ -126,6 +126,9 @@ private:
     bool m_authenticated = false;
     bool m_helperStarting = false;
     bool m_commandInFlight = false;
+    bool m_destroying = false;
+    quint64 m_kernelScanGen = 0;
+    quint64 m_dkmsScanGen = 0;
     std::function<void(int)> m_activeCallback;
     QStringList m_pendingArgs;
     std::function<void(int)> m_pendingCallback;

@@ -10,6 +10,7 @@
 #include <QQuickWindow>
 #include <QTimer>
 #include <cstdlib>
+#include <memory>
 #include "kernel-bridge.hpp"
 #include "theme-manager.hpp"
 
@@ -188,7 +189,7 @@ int main(int argc, char *argv[]) {
     if (!screenshotPath.isEmpty()) {
         QQuickWindow *win = qobject_cast<QQuickWindow*>(engine.rootObjects().first());
         if (win) {
-            auto takeShot = [win, screenshotPath, screenshotTab, screenshotDialog]() {
+            auto takeShot = [&app, win, screenshotPath, screenshotTab, screenshotDialog]() {
                 if (!screenshotDialog.isEmpty()) {
                     QObject *dlg = win->findChild<QObject*>(screenshotDialog);
                     if (dlg) {
@@ -200,16 +201,18 @@ int main(int argc, char *argv[]) {
                         tabs->setProperty("currentIndex", screenshotTab);
                     }
                 }
-                QTimer::singleShot(1500, [win, screenshotPath]() {
+                QTimer::singleShot(1500, &app, [win, screenshotPath, &app]() {
                     QImage img = win->grabWindow();
                     img.save(screenshotPath);
                     qInfo() << "Screenshot saved to:" << screenshotPath;
-                    std::exit(0);
+                    app.quit();
                 });
             };
 
-            QObject::connect(&bridge, &KernelBridge::busyChanged, [&bridge, takeShot]() {
+            auto conn = std::make_shared<QMetaObject::Connection>();
+            *conn = QObject::connect(&bridge, &KernelBridge::busyChanged, &app, [&bridge, takeShot, conn]() {
                 if (!bridge.busy()) {
+                    QObject::disconnect(*conn);
                     // Esperar a que la lista de kernels se pueble y la UI seleccione el kernel activo
                     QTimer::singleShot(1500, takeShot);
                 }
