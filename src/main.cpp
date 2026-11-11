@@ -190,6 +190,8 @@ int main(int argc, char *argv[]) {
                 }
             });
         }
+    } else {
+        QTimer::singleShot(250, &bridge, &KernelBridge::startPrivilegedSession);
     }
 
     return app.exec();

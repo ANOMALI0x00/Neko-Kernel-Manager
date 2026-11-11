@@ -316,6 +316,14 @@ ApplicationWindow {
 
                 // Right buttons
                 GtkHeaderButton {
+                    symbol: "\uf023"
+                    text: qsTr("Unlock")
+                    visible: !bridge.authenticated
+                    enabled: !bridge.busy
+                    onClicked: bridge.startPrivilegedSession()
+                }
+
+                GtkHeaderButton {
                     symbol: "\uf1b3"
                     text: qsTr("DKMS")
                     enabled: !bridge.busy

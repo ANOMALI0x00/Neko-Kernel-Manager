@@ -2,12 +2,15 @@
 #define KERNEL_BRIDGE_HPP
 
 #include <QObject>
+#include <QProcess>
 #include <QStringList>
 #include <QVariantList>
+#include <functional>
 
 class KernelBridge : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
+    Q_PROPERTY(bool authenticated READ isAuthenticated NOTIFY authenticatedChanged)
     Q_PROPERTY(int progress READ progress NOTIFY progressChanged)
     Q_PROPERTY(QString statusMessage READ statusMessage WRITE setStatusMessage NOTIFY statusMessageChanged)
     Q_PROPERTY(bool statusIsError READ statusIsError NOTIFY statusMessageChanged)
@@ -59,7 +62,11 @@ public:
     bool verbose() const { return m_verbose; }
 
     bool busy() const { return m_busy; }
+    bool isAuthenticated() const { return m_authenticated; }
     int progress() const { return m_progress; }
+
+    Q_INVOKABLE void startPrivilegedSession();
+    Q_INVOKABLE void shutdownPrivilegedSession();
 
     QString logs() const { return m_logs; }
     void appendLog(const QString &line);
@@ -72,6 +79,7 @@ public:
 
 signals:
     void busyChanged();
+    void authenticatedChanged();
     void progressChanged();
     void operationFinished(const QString &message);
     void kernelsChanged();
@@ -101,6 +109,22 @@ private:
 
     // Modo verbose para depuración avanzada
     bool m_verbose = false;
+
+    // Sesión privilegiada persistente (pkexec helper daemon sobre pipe privado)
+    QProcess *m_helperProcess = nullptr;
+    QString m_sessionNonce;
+    QByteArray m_stdoutBuffer;
+    QByteArray m_stderrBuffer;
+    bool m_authenticated = false;
+    bool m_helperStarting = false;
+    bool m_commandInFlight = false;
+    std::function<void(int)> m_activeCallback;
+    QStringList m_pendingArgs;
+    std::function<void(int)> m_pendingCallback;
+
+    QString resolveHelperPath() const;
+    void sendHelperCommand(const QStringList &args, std::function<void(int)> callback);
+    void runPrivilegedAction(const QStringList &args, std::function<void(int)> callback);
 
     Q_DISABLE_COPY_MOVE(KernelBridge)
 };
