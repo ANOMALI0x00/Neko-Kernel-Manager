@@ -30,19 +30,44 @@ Whether you are running official Void kernels, custom BORE/Zen builds from Neko 
 <p align="center">
   <img src="screenshots/main.png" alt="Neko Kernel Manager - Main View" width="100%" />
 </p>
-
 <p align="center">
-  <em>Main kernel overview: Status badges, repository detection, kernel actions, and instant filtering.</em>
+  <em>Main kernel overview: Status badges (Running / Default / Installed), repository detection, kernel actions, and instant filtering.</em>
 </p>
 
 <br>
 
 <p align="center">
-  <img src="screenshots/system.png" alt="Neko Kernel Manager - System Information" width="100%" />
+  <img src="screenshots/system.png" alt="Neko Kernel Manager - System Tab" width="100%" />
+</p>
+<p align="center">
+  <em>System tab: Active and default GRUB kernel, bootloader, and detected CPU instruction level.</em>
 </p>
 
+<br>
+
 <p align="center">
-  <em>System hardware, bootloader, and active kernel information.</em>
+  <img src="screenshots/dkms.png" alt="Neko Kernel Manager - DKMS Management" width="100%" />
+</p>
+<p align="center">
+  <em>DKMS Module Management: Manage installed out-of-tree modules and install available repository DKMS packages.</em>
+</p>
+
+<br>
+
+<p align="center">
+  <img src="screenshots/logs.png" alt="Neko Kernel Manager - Activity Log" width="100%" />
+</p>
+<p align="center">
+  <em>Activity Log dialog: Real-time timestamped execution terminal with syntax highlighting and log export.</em>
+</p>
+
+<br>
+
+<p align="center">
+  <img src="screenshots/about.png" alt="Neko Kernel Manager - About" width="100%" />
+</p>
+<p align="center">
+  <em>About dialog: Application info and Matecito Dark theme integration.</em>
 </p>
 
 ---
