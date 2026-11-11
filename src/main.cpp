@@ -116,6 +116,14 @@ int main(int argc, char *argv[]) {
         p.setColor(QPalette::Link, accent);
         p.setColor(QPalette::Highlight, accent);
         p.setColor(QPalette::HighlightedText, onAccent);
+        p.setColor(QPalette::PlaceholderText, QColor("#68645e"));
+
+        // Roles 3D/bisel de Fusion para evitar bordes o botones gris claro
+        p.setColor(QPalette::Light, card.lighter(120));
+        p.setColor(QPalette::Midlight, card.lighter(110));
+        p.setColor(QPalette::Mid, bg.lighter(115));
+        p.setColor(QPalette::Dark, bg.darker(135));
+        p.setColor(QPalette::Shadow, QColor("#111412"));
 
         // Prevenir que el entorno de escritorio inyecte colores claros o discordantes
         p.setColor(QPalette::Disabled, QPalette::WindowText, disabledFg);

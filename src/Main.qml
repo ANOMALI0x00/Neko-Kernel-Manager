@@ -211,9 +211,87 @@ ApplicationWindow {
             Behavior on color { ColorAnimation { duration: 120 } }
         }
 
-        ToolTip.visible: hovered && text.length > 0
-        ToolTip.delay: 500
-        ToolTip.text: text
+        ToolTip {
+            id: hdrTip
+            visible: hdrBtn.hovered && hdrBtn.text.length > 0
+            delay: 500
+            text: hdrBtn.text
+            contentItem: Text {
+                text: hdrTip.text
+                color: themeColors.text
+                font.pixelSize: 11
+            }
+            background: Rectangle {
+                color: themeColors.popover
+                border.color: themeColors.strongBorder
+                border.width: 1
+                radius: 4
+            }
+        }
+    }
+
+    // GTK3 Thin Dark ScrollBar
+    component GtkScrollBar: ScrollBar {
+        id: sb
+        policy: ScrollBar.AsNeeded
+        implicitWidth: 8
+        implicitHeight: 8
+        padding: 2
+        contentItem: Rectangle {
+            implicitWidth: 4
+            implicitHeight: 4
+            radius: 2
+            color: sb.pressed ? themeColors.selected
+                 : sb.hovered ? themeColors.muted
+                 : Qt.rgba(211/255, 205/255, 195/255, 0.22)
+        }
+        background: Rectangle {
+            color: "transparent"
+        }
+    }
+
+    // GTK3 Modal Dialog Base (Matecito Dark)
+    component GtkDialog: Dialog {
+        id: dlg
+        x: Math.round((window.width - width) / 2)
+        y: Math.round((window.height - height) / 2)
+        modal: true
+        focus: true
+        padding: 16
+        topPadding: 14
+        bottomPadding: 14
+
+        Overlay.modal: Rectangle {
+            color: Qt.rgba(0, 0, 0, 0.58)
+        }
+
+        header: Item {
+            implicitHeight: 44
+            Text {
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                text: dlg.title
+                color: themeColors.text
+                font.pixelSize: 14
+                font.weight: Font.DemiBold
+                verticalAlignment: Text.AlignVCenter
+                elide: Text.ElideRight
+            }
+            Rectangle {
+                anchors.bottom: parent.bottom
+                width: parent.width
+                height: 1
+                color: themeColors.border
+            }
+        }
+
+        background: Rectangle {
+            color: themeColors.popover
+            border.color: themeColors.strongBorder
+            border.width: 1
+            radius: 8
+        }
     }
 
     // GTK3 Action Button (Standard, Suggested, Destructive)
@@ -592,7 +670,7 @@ ApplicationWindow {
                             focus: true
                             keyNavigationEnabled: true
                             highlightMoveDuration: 0
-                            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                            ScrollBar.vertical: GtkScrollBar {}
                             onCurrentIndexChanged: {
                                 if (currentIndex >= 0 && currentIndex < window.filteredKernels.length)
                                     window.selectedKernelName = window.filteredKernels[currentIndex].name
@@ -1095,17 +1173,32 @@ ApplicationWindow {
                                     border.color: themeColors.border
                                     border.width: 1
                                     radius: themeColors.cornerRadius
+                                    clip: true
 
-                                    Text {
+                                    ScrollView {
+                                        id: tabLogScroll
                                         anchors.fill: parent
-                                        anchors.margins: 8
-                                        text: bridge.logs.length > 0 ? bridge.logs : qsTr("The activity log is empty.")
-                                        color: themeColors.muted
-                                        font.family: "0xProto Nerd Font Mono"
-                                        font.pixelSize: 11
-                                        textFormat: Text.RichText
-                                        wrapMode: Text.WrapAnywhere
-                                        elide: Text.ElideRight
+                                        clip: true
+                                        ScrollBar.vertical: GtkScrollBar {}
+                                        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+
+                                        TextArea {
+                                            width: tabLogScroll.availableWidth
+                                            text: bridge.logs.length > 0 ? bridge.logs : qsTr("The activity log is empty.")
+                                            readOnly: true
+                                            selectByMouse: true
+                                            color: themeColors.muted
+                                            selectionColor: themeColors.selected
+                                            selectedTextColor: themeColors.selectedText
+                                            font.family: "0xProto Nerd Font Mono"
+                                            font.pixelSize: 11
+                                            textFormat: TextEdit.RichText
+                                            wrapMode: TextEdit.Wrap
+                                            padding: 8
+                                            topInset: 0
+                                            bottomInset: 0
+                                            background: null
+                                        }
                                     }
                                 }
                             }
@@ -1172,14 +1265,10 @@ ApplicationWindow {
     // ========================================================================
 
     // Remove Confirmation Dialog
-    Dialog {
+    GtkDialog {
         id: removeDialog
         property var kernelData: null
-        x: Math.round((window.width - width) / 2)
-        y: Math.round((window.height - height) / 2)
         width: Math.min(480, window.width - 48)
-        modal: true
-        focus: true
         title: qsTr("Remove kernel")
         onClosed: kernelData = null
 
@@ -1238,24 +1327,13 @@ ApplicationWindow {
                 }
             }
         }
-
-        background: Rectangle {
-            color: themeColors.popover
-            border.color: themeColors.strongBorder
-            border.width: 1
-            radius: 8
-        }
     }
 
     // Purge Dialog
-    Dialog {
+    GtkDialog {
         id: purgeDialog
         property string vkList: ""
-        x: Math.round((window.width - width) / 2)
-        y: Math.round((window.height - height) / 2)
         width: Math.min(500, window.width - 48)
-        modal: true
-        focus: true
         title: qsTr("Purge old kernels (vkpurge)")
         onAboutToShow: {
             vkList = bridge.getVkpurgeList()
@@ -1281,10 +1359,13 @@ ApplicationWindow {
                 color: themeColors.inputBg
                 border.color: themeColors.inputBorder
                 radius: 4
+                clip: true
 
                 ScrollView {
                     anchors.fill: parent
                     anchors.margins: 8
+                    clip: true
+                    ScrollBar.vertical: GtkScrollBar {}
                     Text {
                         id: purgeListText
                         text: purgeDialog.vkList
@@ -1330,30 +1411,18 @@ ApplicationWindow {
                 }
             }
         }
-
-        background: Rectangle {
-            color: themeColors.popover
-            border.color: themeColors.strongBorder
-            border.width: 1
-            radius: 8
-        }
     }
 
     // Activity Log Dialog
-    Dialog {
+    GtkDialog {
         id: logDialog
-        x: Math.round((window.width - width) / 2)
-        y: Math.round((window.height - height) / 2)
+        objectName: "logDialog"
         width: Math.min(780, window.width - 48)
         height: Math.min(520, window.height - 48)
-        modal: true
-        focus: true
         title: qsTr("Activity Log")
-        standardButtons: Dialog.Close
 
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 8
+        contentItem: ColumnLayout {
+            spacing: 10
 
             RowLayout {
                 Layout.fillWidth: true
@@ -1377,15 +1446,20 @@ ApplicationWindow {
                 border.color: themeColors.border
                 border.width: 1
                 radius: themeColors.cornerRadius
+                clip: true
 
                 ScrollView {
+                    id: logScroll
                     anchors.fill: parent
-                    anchors.margins: 8
                     clip: true
+                    ScrollBar.vertical: GtkScrollBar {}
+                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
                     TextArea {
+                        width: logScroll.availableWidth
                         text: bridge.logs.length > 0 ? bridge.logs : qsTr("No log entries recorded.")
                         readOnly: true
+                        selectByMouse: true
                         color: themeColors.text
                         selectionColor: themeColors.selected
                         selectedTextColor: themeColors.selectedText
@@ -1393,35 +1467,41 @@ ApplicationWindow {
                         font.pixelSize: 11
                         textFormat: TextEdit.RichText
                         wrapMode: TextEdit.Wrap
+                        padding: 10
+                        topInset: 0
+                        bottomInset: 0
                         background: null
                     }
                 }
             }
-        }
-        background: Rectangle {
-            color: themeColors.popover
-            border.color: themeColors.strongBorder
-            border.width: 1
-            radius: 8
+
+            Rectangle {
+                Layout.fillWidth: true
+                height: 1
+                color: themeColors.border
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                GtkButton {
+                    text: qsTr("Close")
+                    onClicked: logDialog.close()
+                }
+            }
         }
     }
 
     // DKMS Dialog
-    Dialog {
+    GtkDialog {
         id: dkmsDialog
         objectName: "dkmsDialog"
-        x: Math.round((window.width - width) / 2)
-        y: Math.round((window.height - height) / 2)
         width: Math.min(800, window.width - 48)
         height: Math.min(540, window.height - 48)
-        modal: true
-        focus: true
         title: qsTr("DKMS Module Management")
-        standardButtons: Dialog.Close
 
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 8
+        contentItem: ColumnLayout {
+            spacing: 10
 
             RowLayout {
                 Layout.fillWidth: true
@@ -1460,7 +1540,7 @@ ApplicationWindow {
                     clip: true
                     model: bridge.dkmsModules
                     boundsBehavior: Flickable.StopAtBounds
-                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                    ScrollBar.vertical: GtkScrollBar {}
 
                     delegate: Rectangle {
                         readonly property bool isRepoAvailable: modelData.isDkmsPackage && !modelData.packageInstalled
@@ -1542,28 +1622,32 @@ ApplicationWindow {
                     Text { text: bridge.busy ? qsTr("Loading DKMS modules…") : qsTr("No DKMS modules found"); color: themeColors.text; font.pixelSize: 13 }
                 }
             }
-        }
-        background: Rectangle {
-            color: themeColors.popover
-            border.color: themeColors.strongBorder
-            border.width: 1
-            radius: 8
+
+            Rectangle {
+                Layout.fillWidth: true
+                height: 1
+                color: themeColors.border
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                GtkButton {
+                    text: qsTr("Close")
+                    onClicked: dkmsDialog.close()
+                }
+            }
         }
     }
 
     // About Dialog
-    Dialog {
+    GtkDialog {
         id: aboutDialog
-        x: Math.round((window.width - width) / 2)
-        y: Math.round((window.height - height) / 2)
+        objectName: "aboutDialog"
         width: Math.min(440, window.width - 48)
-        modal: true
-        focus: true
         title: qsTr("About Neko Kernel Manager")
-        standardButtons: Dialog.Close
 
-        ColumnLayout {
-            width: parent.width
+        contentItem: ColumnLayout {
             spacing: 12
 
             Image {
@@ -1600,12 +1684,21 @@ ApplicationWindow {
                 font.pixelSize: 11
                 horizontalAlignment: Text.AlignHCenter
             }
-        }
-        background: Rectangle {
-            color: themeColors.popover
-            border.color: themeColors.strongBorder
-            border.width: 1
-            radius: 8
+
+            Rectangle {
+                Layout.fillWidth: true
+                height: 1
+                color: themeColors.border
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Item { Layout.fillWidth: true }
+                GtkButton {
+                    text: qsTr("Close")
+                    onClicked: aboutDialog.close()
+                }
+            }
         }
     }
 
