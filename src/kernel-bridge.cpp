@@ -366,9 +366,11 @@ QString KernelBridge::detectedCpuLevel() const {
     return QString::fromStdString(utils::detectCpuLevel());
 }
 
-// Void Linux usa GRUB como bootloader por defecto
+// Void Linux usa GRUB como bootloader por defecto (BIOS o UEFI)
 QString KernelBridge::detectedBootloader() const {
-    return "GRUB";
+    return QFileInfo::exists(QStringLiteral("/sys/firmware/efi"))
+        ? QStringLiteral("GRUB (UEFI)")
+        : QStringLiteral("GRUB (BIOS)");
 }
 
 static QVariantList buildKernelsList() {
@@ -1241,6 +1243,37 @@ void KernelBridge::autoinstallDkms() {
     });
 }
 
+// Extrae la versión de kernel desde una entrada GRUB (título o menuentry --id).
+static QString extractKernelVersionFromGrubEntry(const QString &entryRaw) {
+    QString entry = entryRaw.trimmed();
+    entry.remove('"');
+    entry.remove('\'');
+    if (entry.isEmpty()) return {};
+
+    const int arrowIdx = entry.lastIndexOf('>');
+    const QString leaf = (arrowIdx != -1) ? entry.mid(arrowIdx + 1).trimmed() : entry;
+
+    if (leaf.startsWith(QStringLiteral("gnulinux-simple-"))) {
+        return {};
+    }
+
+    // Formato ID estándar de GRUB (10_linux): gnulinux-<ver>-(advanced|recovery|simple)-<uuid>
+    static const QRegularExpression idRe(QStringLiteral("^gnulinux-(.+)-(advanced|recovery|simple)-.+$"));
+    const QRegularExpressionMatch idMatch = idRe.match(leaf);
+    if (idMatch.hasMatch()) {
+        return idMatch.captured(1).trimmed();
+    }
+
+    static const QList<QString> markers = {"with Linux ", "con Linux "};
+    for (const QString &marker : markers) {
+        const int idx = leaf.indexOf(marker, 0, Qt::CaseInsensitive);
+        if (idx != -1) {
+            return leaf.mid(idx + marker.size()).trimmed();
+        }
+    }
+    return leaf;
+}
+
 // Default Kernel Selection Implementation (solo GRUB)
 static QString detectDefaultKernel() {
     QFile grubFile("/etc/default/grub");
@@ -1249,52 +1282,64 @@ static QString detectDefaultKernel() {
         while (!grubFile.atEnd()) {
             const QString line = QString::fromUtf8(grubFile.readLine()).trimmed();
             if (line.startsWith("GRUB_DEFAULT=")) {
-                val = line.mid(QStringLiteral("GRUB_DEFAULT=").size()).trimmed();
+                val = line.mid(QStringLiteral("GRUB_DEFAULT=").size());
+                const int hashIdx = val.indexOf('#');
+                if (hashIdx != -1) val.truncate(hashIdx);
+                val = val.trimmed();
                 val.remove('"');
                 val.remove('\'');
-                break;
             }
         }
         if (val == "saved") {
-            std::string savedRaw;
-            if (utils::commandExists("grub-editenv")) {
-                savedRaw = utils::execProgram("grub-editenv", {"list"});
-            } else if (utils::commandExists("grub2-editenv")) {
-                savedRaw = utils::execProgram("grub2-editenv", {"list"});
-            }
-            const QString savedOutput = QString::fromUtf8(savedRaw.c_str());
-            for (const QString &savedLine : savedOutput.split('\n', Qt::SkipEmptyParts)) {
-                const QString trimmed = savedLine.trimmed();
-                if (!trimmed.startsWith("saved_entry=")) continue;
-                QString savedVal = trimmed.mid(QStringLiteral("saved_entry=").size()).trimmed();
-                savedVal.remove('"');
-                savedVal.remove('\'');
-                if (!savedVal.isEmpty()) {
-                    static const QList<QString> markers = {"with Linux ", "con Linux "};
-                    for (const QString &marker : markers) {
-                        int idx = savedVal.indexOf(marker, 0, Qt::CaseInsensitive);
-                        if (idx != -1) {
-                            return savedVal.mid(idx + marker.size()).trimmed();
+            std::string editenvCmd;
+            if (utils::commandExists("grub-editenv")) editenvCmd = "grub-editenv";
+            else if (utils::commandExists("grub2-editenv")) editenvCmd = "grub2-editenv";
+
+            auto parseSavedEntry = [](const std::string &raw) -> QString {
+                const QString savedOutput = QString::fromUtf8(raw.c_str());
+                for (const QString &savedLine : savedOutput.split('\n', Qt::SkipEmptyParts)) {
+                    const QString trimmed = savedLine.trimmed();
+                    if (!trimmed.startsWith("saved_entry=")) continue;
+                    const QString parsed = extractKernelVersionFromGrubEntry(
+                        trimmed.mid(QStringLiteral("saved_entry=").size()));
+                    if (!parsed.isEmpty()) return parsed;
+                }
+                return {};
+            };
+
+            if (!editenvCmd.empty()) {
+                QStringList envPaths = {
+                    QStringLiteral("/boot/grub/grubenv"),
+                    QStringLiteral("/boot/grub2/grubenv"),
+                    QStringLiteral("/boot/efi/grub/grubenv"),
+                    QStringLiteral("/boot/efi/grub2/grubenv"),
+                    QStringLiteral("/efi/grub/grubenv")
+                };
+                QDir efiDir(QStringLiteral("/boot/efi/EFI"));
+                if (efiDir.exists()) {
+                    for (const QString &sub : efiDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+                        const QString lower = sub.toLower();
+                        if (!lower.startsWith(QStringLiteral("void")) &&
+                            !lower.startsWith(QStringLiteral("neko")) &&
+                            !lower.startsWith(QStringLiteral("grub"))) {
+                            continue;
                         }
+                        const QString cand = efiDir.filePath(sub + QStringLiteral("/grubenv"));
+                        if (QFileInfo::exists(cand)) envPaths.append(cand);
                     }
-                    int arrowIdx = savedVal.lastIndexOf('>');
-                    if (arrowIdx != -1) {
-                        return savedVal.mid(arrowIdx + 1).trimmed();
-                    }
-                    return savedVal;
                 }
-            }
-        } else if (!val.isEmpty()) {
-            static const QList<QString> markers = {"with Linux ", "con Linux "};
-            for (const QString &marker : markers) {
-                int withLinuxIdx = val.indexOf(marker, 0, Qt::CaseInsensitive);
-                if (withLinuxIdx != -1) {
-                    return val.mid(withLinuxIdx + marker.size()).trimmed();
+                for (const QString &envPath : envPaths) {
+                    if (!QFileInfo::exists(envPath)) continue;
+                    const QString parsed = parseSavedEntry(
+                        utils::execProgram(editenvCmd, {envPath.toStdString(), "list"}));
+                    if (!parsed.isEmpty()) return parsed;
                 }
+                const QString fallbackParsed = parseSavedEntry(utils::execProgram(editenvCmd, {"list"}));
+                if (!fallbackParsed.isEmpty()) return fallbackParsed;
             }
-            if (val != "0") {
-                return val;
-            }
+        } else if (!val.isEmpty() && val != "0") {
+            const QString parsed = extractKernelVersionFromGrubEntry(val);
+            if (!parsed.isEmpty()) return parsed;
         }
     }
     return readActiveKernelVersion();
