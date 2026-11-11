@@ -2,6 +2,12 @@
 <RCC version="1.0">
     <qresource prefix="/neko">
         <file>src/Main.qml</file>
+        <file>src/ui/qmldir</file>
+        <file>src/ui/ThemePalette.qml</file>
+        <file>src/ui/NekoButton.qml</file>
+        <file>src/ui/NekoDialog.qml</file>
+        <file>src/ui/NekoHeaderButton.qml</file>
+        <file>src/ui/NekoScrollBar.qml</file>
         <file>Data/logo.png</file>
         <file>Data/fonts/0xProtoNerdFont-Regular.ttf</file>
         <file>Data/fonts/0xProtoNerdFont-Bold.ttf</file>

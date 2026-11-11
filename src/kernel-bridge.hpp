@@ -61,6 +61,11 @@ public:
     void setVerbose(bool v) { m_verbose = v; }
     bool verbose() const { return m_verbose; }
 
+    void setLogPalette(const QString &errorColor,
+                       const QString &successColor,
+                       const QString &warningColor,
+                       const QString &infoColor);
+
     bool busy() const { return m_busy; }
     bool isAuthenticated() const { return m_authenticated; }
     int progress() const { return m_progress; }
@@ -106,6 +111,12 @@ private:
 
     // Modo verbose para depuración avanzada
     bool m_verbose = false;
+
+    // Colores semánticos del visor de logs (inyectados desde ThemeManager)
+    QString m_logErrorColor = QStringLiteral("#ff5555");
+    QString m_logSuccessColor = QStringLiteral("#50fa7b");
+    QString m_logWarningColor = QStringLiteral("#f1fa8c");
+    QString m_logInfoColor = QStringLiteral("#bd93f9");
 
     // Sesión privilegiada persistente (pkexec helper daemon sobre pipe privado)
     QProcess *m_helperProcess = nullptr;

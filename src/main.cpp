@@ -97,11 +97,15 @@ int main(int argc, char *argv[]) {
     // System theme (Noctalia / matugen / pywal / libadwaita), with a dark fallback.
     ThemeManager theme;
 
-    // Forzar paleta Matecito Dark nativa para todos los componentes y estados
+    // Aplicar paleta activa de ThemeManager a todos los componentes nativos y estados
     auto applyNative = [&app, &theme]() {
         const QColor bg = theme.windowBg(), fg = theme.windowFg(), view = theme.viewBg(),
                      card = theme.cardBg(), accent = theme.accentBg(), onAccent = theme.accentFg(),
-                     disabledFg("#68645e"), disabledBg("#222724");
+                     disabledFg = theme.faintFg(), disabledBg = theme.disabledBg(),
+                     btnBg = theme.buttonBg(), btnHover = theme.buttonHoverBg();
+        QColor borderCol = fg;
+        borderCol.setAlphaF(0.18);
+
         QPalette p;
         p.setColor(QPalette::Window, bg);
         p.setColor(QPalette::WindowText, fg);
@@ -110,34 +114,34 @@ int main(int argc, char *argv[]) {
         p.setColor(QPalette::ToolTipBase, card);
         p.setColor(QPalette::ToolTipText, fg);
         p.setColor(QPalette::Text, fg);
-        p.setColor(QPalette::Button, card);
+        p.setColor(QPalette::Button, btnBg);
         p.setColor(QPalette::ButtonText, fg);
-        p.setColor(QPalette::BrightText, QColor(Qt::white));
+        p.setColor(QPalette::BrightText, fg);
         p.setColor(QPalette::Link, accent);
         p.setColor(QPalette::Highlight, accent);
         p.setColor(QPalette::HighlightedText, onAccent);
-        p.setColor(QPalette::PlaceholderText, QColor("#68645e"));
+        p.setColor(QPalette::PlaceholderText, disabledFg);
 
-        // Roles 3D/bisel de Fusion para evitar bordes o botones gris claro
-        p.setColor(QPalette::Light, card.lighter(120));
-        p.setColor(QPalette::Midlight, card.lighter(110));
-        p.setColor(QPalette::Mid, bg.lighter(115));
-        p.setColor(QPalette::Dark, bg.darker(135));
-        p.setColor(QPalette::Shadow, QColor("#111412"));
+        // Roles 3D/bisel de Fusion derivados del tema activo
+        p.setColor(QPalette::Light, btnHover);
+        p.setColor(QPalette::Midlight, btnBg);
+        p.setColor(QPalette::Mid, card);
+        p.setColor(QPalette::Dark, disabledBg);
+        p.setColor(QPalette::Shadow, theme.shadowColor());
 
-        // Prevenir que el entorno de escritorio inyecte colores claros o discordantes
+        // Estados deshabilitados coherentes con el tema
         p.setColor(QPalette::Disabled, QPalette::WindowText, disabledFg);
         p.setColor(QPalette::Disabled, QPalette::Text, disabledFg);
         p.setColor(QPalette::Disabled, QPalette::ButtonText, disabledFg);
         p.setColor(QPalette::Disabled, QPalette::Button, disabledBg);
         p.setColor(QPalette::Disabled, QPalette::Base, disabledBg);
-        p.setColor(QPalette::Disabled, QPalette::Highlight, QColor("#37413b"));
+        p.setColor(QPalette::Disabled, QPalette::Highlight, theme.disabledHighlight());
 
         app.setPalette(p);
 
         app.setStyleSheet(QString(
             "QWidget { background-color:%1; color:%2; font-family:'0xProto Nerd Font'; }"
-            "QMenu { background-color:%3; color:%2; border:1px solid rgba(211,205,195,0.18); padding:4px; }"
+            "QMenu { background-color:%3; color:%2; border:1px solid %6; padding:4px; }"
             "QMenu::item:selected { background-color:%4; color:%5; border-radius:4px; }"
             "QComboBox { background-color:%1; color:%2; border:1px solid %3; padding:2px 10px; }"
             "QComboBox QAbstractItemView { background-color:%1; color:%2;"
@@ -145,14 +149,27 @@ int main(int argc, char *argv[]) {
             "QComboBox QAbstractItemView::item { color:%2; padding:8px; background-color:transparent; min-height:30px; }"
             "QComboBox QAbstractItemView::item:selected { background-color:%4; color:%5; }"
             "QToolTip { background-color:%3; color:%2; border:1px solid %4; }"
-        ).arg(bg.name(), fg.name(), card.name(), accent.name(), onAccent.name()));
+        ).arg(bg.name(), fg.name(), card.name(), accent.name(), onAccent.name(),
+              QString("rgba(%1,%2,%3,0.18)").arg(fg.red()).arg(fg.green()).arg(fg.blue())));
     };
     applyNative();
-    QObject::connect(&theme, &ThemeManager::changed, &app, applyNative);
 
     qmlRegisterType<KernelBridge>("Neko", 1, 0, "KernelBridge");
 
     KernelBridge bridge;
+    auto syncLogPalette = [&bridge, &theme]() {
+        bridge.setLogPalette(
+            theme.logErrorColor().name(),
+            theme.logSuccessColor().name(),
+            theme.logWarningColor().name(),
+            theme.logInfoColor().name()
+        );
+    };
+    syncLogPalette();
+    QObject::connect(&theme, &ThemeManager::changed, &app, [applyNative, syncLogPalette]() {
+        applyNative();
+        syncLogPalette();
+    });
     // Activar modo verbose si se pasó el argumento
     if (verbose) {
         bridge.setVerbose(true);

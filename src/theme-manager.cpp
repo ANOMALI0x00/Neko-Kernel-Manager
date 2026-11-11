@@ -1,7 +1,19 @@
 #include "theme-manager.hpp"
 
+#include <QDir>
 #include <QFile>
 #include <QRegularExpression>
+#include <QStandardPaths>
+
+QColor ThemeManager::mix(const QColor &a, const QColor &b, qreal amount) {
+    const qreal t = qBound(0.0, amount, 1.0);
+    return QColor::fromRgbF(
+        a.redF()   + (b.redF()   - a.redF())   * t,
+        a.greenF() + (b.greenF() - a.greenF()) * t,
+        a.blueF()  + (b.blueF()  - a.blueF())  * t,
+        a.alphaF() + (b.alphaF() - a.alphaF()) * t
+    );
+}
 
 static QColor parseValue(QString v, const QHash<QString, QString> &raw, int depth = 0) {
     v = v.trimmed();
@@ -41,10 +53,11 @@ static QColor parseValue(QString v, const QHash<QString, QString> &raw, int dept
 }
 
 ThemeManager::ThemeManager(QObject *parent) : QObject(parent) {
-    // Solo utilizar la hoja de estilo empaquetada de Matecito Dark
+    const QString userConfigDir = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
     m_files = {
-        ":/neko/Data/themes/matecito-dark.css",
-        "Data/themes/matecito-dark.css"
+        QDir::cleanPath(userConfigDir + "/neko-kernel-manager/theme.css"),
+        QStringLiteral("Data/themes/matecito-dark.css"),
+        QStringLiteral(":/neko/Data/themes/matecito-dark.css")
     };
 
     load();
@@ -65,16 +78,20 @@ QColor ThemeManager::get(const QString &name, const QColor &fallback) const {
 void ThemeManager::load() {
     static const QRegularExpression re(
         QStringLiteral(R"(@define-color\s+([A-Za-z0-9_\-]+)\s+([^;]+);)"));
+    static constexpr qint64 kMaxThemeBytes = 1024 * 1024;
 
     QHash<QString, QString> raw;
     QString foundIn;
 
     for (const QString &path : m_files) {
-        if (!QFile::exists(path)) {
+        if (path.isEmpty() || !QFile::exists(path)) {
             continue;
         }
         QFile f(path);
         if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            continue;
+        }
+        if (f.size() > kMaxThemeBytes) {
             continue;
         }
         const QString text = QString::fromUtf8(f.readAll());
@@ -87,7 +104,7 @@ void ThemeManager::load() {
         }
         if (any) {
             foundIn = path;
-            break; // Se encontró el tema empaquetado, no permitir sobreescrituras
+            break;
         }
     }
 

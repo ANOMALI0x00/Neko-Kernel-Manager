@@ -425,6 +425,16 @@ void KernelBridge::updateKernels() {
     (void)future;
 }
 
+void KernelBridge::setLogPalette(const QString &errorColor,
+                                 const QString &successColor,
+                                 const QString &warningColor,
+                                 const QString &infoColor) {
+    if (!errorColor.isEmpty()) m_logErrorColor = errorColor;
+    if (!successColor.isEmpty()) m_logSuccessColor = successColor;
+    if (!warningColor.isEmpty()) m_logWarningColor = warningColor;
+    if (!infoColor.isEmpty()) m_logInfoColor = infoColor;
+}
+
 void KernelBridge::appendLog(const QString &line) {
     if (QThread::currentThread() != this->thread()) {
         QMetaObject::invokeMethod(this, [this, line]() { appendLog(line); });
@@ -449,13 +459,13 @@ void KernelBridge::appendLog(const QString &line) {
     const QString escapedLine = line.toHtmlEscaped();
     const QString lowerLine = line.toLower();
     if (lowerLine.contains("error") || lowerLine.contains("failed")) {
-        formattedLine += "<font color='#ff5555'>" + escapedLine + "</font>";
+        formattedLine += "<font color='" + m_logErrorColor + "'>" + escapedLine + "</font>";
     } else if (lowerLine.contains("success") || lowerLine.contains("complete") || lowerLine.contains("finished")) {
-        formattedLine += "<font color='#50fa7b'>" + escapedLine + "</font>";
+        formattedLine += "<font color='" + m_logSuccessColor + "'>" + escapedLine + "</font>";
     } else if (lowerLine.contains("warning")) {
-        formattedLine += "<font color='#f1fa8c'>" + escapedLine + "</font>";
+        formattedLine += "<font color='" + m_logWarningColor + "'>" + escapedLine + "</font>";
     } else if (line.startsWith("Executing") || line.startsWith("Starting") || line.startsWith("Initiating") || line.startsWith("Scanning") || line.startsWith("Requesting")) {
-        formattedLine += "<font color='#bd93f9'>" + escapedLine + "</font>";
+        formattedLine += "<font color='" + m_logInfoColor + "'>" + escapedLine + "</font>";
     } else {
         formattedLine += escapedLine;
     }

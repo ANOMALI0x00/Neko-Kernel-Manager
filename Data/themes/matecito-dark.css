@@ -55,3 +55,9 @@
 @define-color theme_unfocused_base_color @window_bg_color;
 @define-color theme_unfocused_selected_bg_color @accent_bg_color;
 @define-color theme_unfocused_selected_fg_color @accent_fg_color;
+
+/* Optional semantic override tokens (auto-derived if omitted):
+ * warning_color, success_color, info_color, muted_fg_color, faint_fg_color,
+ * button_bg_color, button_hover_color, button_active_color, input_bg_color,
+ * log_error_color, log_success_color, log_warning_color, log_info_color
+ */

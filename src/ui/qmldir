@@ -1,0 +1,6 @@
+module ui
+singleton ThemePalette 1.0 ThemePalette.qml
+NekoButton 1.0 NekoButton.qml
+NekoDialog 1.0 NekoDialog.qml
+NekoHeaderButton 1.0 NekoHeaderButton.qml
+NekoScrollBar 1.0 NekoScrollBar.qml
