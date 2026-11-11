@@ -1,12 +1,7 @@
 #include "theme-manager.hpp"
 
-#include <QDir>
 #include <QFile>
 #include <QRegularExpression>
-#include <QStandardPaths>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 QColor ThemeManager::mix(const QColor &a, const QColor &b, qreal amount) {
     const qreal t = qBound(0.0, amount, 1.0);
@@ -56,10 +51,7 @@ static QColor parseValue(QString v, const QHash<QString, QString> &raw, int dept
 }
 
 ThemeManager::ThemeManager(QObject *parent) : QObject(parent) {
-    const QString userConfigDir = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
     m_files = {
-        QDir::cleanPath(userConfigDir + "/neko-kernel-manager/theme.css"),
-        QStringLiteral("Data/themes/matecito-dark.css"),
         QStringLiteral(":/neko/Data/themes/matecito-dark.css")
     };
 
@@ -79,35 +71,13 @@ QColor ThemeManager::get(const QString &name, const QColor &fallback) const {
 }
 
 static bool readThemeFileBounded(const QString &path, qint64 maxBytes, QString &outText) {
-    if (path.isEmpty()) {
+    if (!path.startsWith(QStringLiteral(":/"))) {
         return false;
     }
 
-    QFile f;
-    if (path.startsWith(QStringLiteral(":/"))) {
-        f.setFileName(path);
-        if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            return false;
-        }
-        if (f.size() > maxBytes) {
-            return false;
-        }
-    } else {
-        const QByteArray localPath = path.toLocal8Bit();
-        const int fd = ::open(localPath.constData(), O_RDONLY | O_NONBLOCK);
-        if (fd < 0) {
-            return false;
-        }
-        struct ::stat st {};
-        if (::fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
-            st.st_size > maxBytes) {
-            ::close(fd);
-            return false;
-        }
-        if (!f.open(fd, QIODevice::ReadOnly | QIODevice::Text, QFileDevice::AutoCloseHandle)) {
-            ::close(fd);
-            return false;
-        }
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text) || f.size() > maxBytes) {
+        return false;
     }
 
     const QByteArray data = f.read(maxBytes + 1);

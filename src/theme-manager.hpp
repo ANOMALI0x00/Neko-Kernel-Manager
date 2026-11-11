@@ -7,9 +7,9 @@
 #include <QStringList>
 
 // Modular GTK3-compatible Theme Manager.
-// Reads @define-color tokens from user override (~/.config/neko-kernel-manager/theme.css),
-// local/installed theme files, or the bundled Matecito Dark stylesheet, and computes
-// derived UI tokens so changing themes does not require touching application code.
+// Reads @define-color tokens exclusively from the bundled Matecito Dark stylesheet
+// (Data/themes/matecito-dark.css -> :/neko/Data/themes/matecito-dark.css) and
+// computes derived UI tokens so editing Matecito Dark does not require touching C++/QML code.
 class ThemeManager : public QObject {
     Q_OBJECT
     Q_PROPERTY(QColor windowBg           READ windowBg           NOTIFY changed)

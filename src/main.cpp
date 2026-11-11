@@ -95,7 +95,7 @@ int main(int argc, char *argv[]) {
         app.installTranslator(&translator);
     }
 
-    // System theme (Noctalia / matugen / pywal / libadwaita), with a dark fallback.
+    // Tema modular exclusivo: Matecito Dark (Data/themes/matecito-dark.css).
     ThemeManager theme;
 
     // Aplicar paleta activa de ThemeManager a todos los componentes nativos y estados
