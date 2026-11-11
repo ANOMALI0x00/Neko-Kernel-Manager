@@ -1015,10 +1015,12 @@ void KernelBridge::installDkmsModule(const QString &name, const QString &version
         }
 
         std::string nvidiaVersion;
+        std::error_code fsEc;
         const std::string srcRoot = "/usr/src";
-        if (std::filesystem::exists(srcRoot) && std::filesystem::is_directory(srcRoot)) {
-            for (const auto &entry : std::filesystem::directory_iterator(srcRoot)) {
-                if (!entry.is_directory()) continue;
+        if (std::filesystem::exists(srcRoot, fsEc) && std::filesystem::is_directory(srcRoot, fsEc)) {
+            for (const auto &entry : std::filesystem::directory_iterator(srcRoot, fsEc)) {
+                if (fsEc) break;
+                if (!entry.is_directory(fsEc)) continue;
                 const std::string nameStr = entry.path().filename().string();
                 if (nameStr.rfind("nvidia-", 0) == 0) {
                     nvidiaVersion = nameStr.substr(strlen("nvidia-"));
@@ -1050,8 +1052,9 @@ void KernelBridge::installDkmsModule(const QString &name, const QString &version
         }
 
         QStringList dkmsArgs = {"nvidia-dkms-install", QString::fromStdString(nvidiaVersion)};
-        for (const auto &entry : std::filesystem::directory_iterator(modulesRoot)) {
-            if (!entry.is_directory()) continue;
+        for (const auto &entry : std::filesystem::directory_iterator(modulesRoot, fsEc)) {
+            if (fsEc) break;
+            if (!entry.is_directory(fsEc)) continue;
             const std::string kernelDir = entry.path().filename().string();
             if (kernelDir.empty()) continue;
 

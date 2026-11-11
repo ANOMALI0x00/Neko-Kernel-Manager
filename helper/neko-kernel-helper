@@ -66,7 +66,10 @@ execute_action() {
             running_kernel="$(uname -r 2>/dev/null || true)"
             owner_pkg=""
             if [ -n "$running_kernel" ] && command -v xbps-query >/dev/null 2>&1; then
-                owner_pkg="$(xbps-query -o "/boot/vmlinuz-${running_kernel}" 2>/dev/null | cut -d: -f1 || true)"
+                owner_pkg="$(xbps-query -o "/boot/vmlinuz-${running_kernel}" 2>/dev/null | head -n 1 | cut -d: -f1 || true)"
+                if [ -z "$owner_pkg" ]; then
+                    owner_pkg="$(xbps-query -o "/usr/lib/modules/${running_kernel}/modules.dep" 2>/dev/null | head -n 1 | cut -d: -f1 || true)"
+                fi
             fi
             owner_name="${owner_pkg%-*}"
 
@@ -99,10 +102,10 @@ execute_action() {
             if [ -x /etc/kernel.d/post-install/10-dkms ]; then
                 /etc/kernel.d/post-install/10-dkms "$NAME" "$VER"
             fi
-            if which dracut >/dev/null 2>&1; then
+            if command -v dracut >/dev/null 2>&1; then
                 dracut --force "/boot/initramfs-${VER}.img" "$VER"
             fi
-            if which grub-mkconfig >/dev/null 2>&1; then
+            if command -v grub-mkconfig >/dev/null 2>&1; then
                 grub-mkconfig -o /boot/grub/grub.cfg || true
             fi
             ;;
@@ -119,7 +122,7 @@ execute_action() {
                       "/boot/config-${VER}" "/boot/System.map-${VER}" \
                       "/boot/vmlinuz-${VER}.old" "/boot/initramfs-${VER}.old.img"
                 rm -rf "/usr/lib/modules/${VER}" "/lib/modules/${VER}"
-                if which grub-mkconfig >/dev/null 2>&1; then
+                if command -v grub-mkconfig >/dev/null 2>&1; then
                     grub-mkconfig -o /boot/grub/grub.cfg || true
                 fi
             }
@@ -128,7 +131,7 @@ execute_action() {
         vkpurge-rm-all)
             echo "Purgando todos los kernels no utilizados con vkpurge..."
             vkpurge rm all
-            if which grub-mkconfig >/dev/null 2>&1; then
+            if command -v grub-mkconfig >/dev/null 2>&1; then
                 grub-mkconfig -o /boot/grub/grub.cfg || true
             fi
             ;;
@@ -143,7 +146,7 @@ execute_action() {
                   "/boot/config-${VER}" "/boot/System.map-${VER}" \
                   "/boot/vmlinuz-${VER}.old" "/boot/initramfs-${VER}.old.img"
             rm -rf "/usr/lib/modules/${VER}" "/lib/modules/${VER}"
-            if which grub-mkconfig >/dev/null 2>&1; then
+            if command -v grub-mkconfig >/dev/null 2>&1; then
                 grub-mkconfig -o /boot/grub/grub.cfg || true
             fi
             ;;
@@ -209,7 +212,7 @@ execute_action() {
 
             local GRUB_EDITENV=""
             for cmd in grub-editenv grub2-editenv; do
-                if which "$cmd" >/dev/null 2>&1; then
+                if command -v "$cmd" >/dev/null 2>&1; then
                     GRUB_EDITENV="$cmd"
                     break
                 fi
@@ -235,7 +238,7 @@ execute_action() {
 
             echo "Instalando módulo DKMS: $MODULE $VER para kernel $KVER"
             dkms install -m "$MODULE" -v "$VER" -k "$KVER"
-            if which dracut >/dev/null 2>&1; then
+            if command -v dracut >/dev/null 2>&1; then
                 echo "Regenerando initramfs con Dracut..."
                 dracut --force "/boot/initramfs-${KVER}.img" "$KVER" || true
             fi
@@ -263,7 +266,7 @@ execute_action() {
 
             echo "Autoinstalando módulos DKMS para kernel activo: $KVER"
             dkms autoinstall -k "$KVER"
-            if which dracut >/dev/null 2>&1; then
+            if command -v dracut >/dev/null 2>&1; then
                 echo "Regenerando initramfs con Dracut..."
                 dracut --force "/boot/initramfs-${KVER}.img" "$KVER" || true
             fi
@@ -277,7 +280,7 @@ execute_action() {
                 validate_version "$k"
                 echo "Forzando instalación DKMS de NVIDIA ($VER) para kernel: $k"
                 dkms install -m nvidia -v "$VER" -k "$k" || true
-                if which dracut >/dev/null 2>&1; then
+                if command -v dracut >/dev/null 2>&1; then
                     dracut --force "/boot/initramfs-${k}.img" "$k" || true
                 fi
             done

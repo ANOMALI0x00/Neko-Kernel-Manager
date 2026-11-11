@@ -59,6 +59,7 @@ std::string Kernel::size() const {
         if (mb > 0) return std::to_string(mb) + "MB";
         return std::to_string(totalBytes / 1024) + "KB";
     }
+    if (!m_pkg.is_installed) return "Unknown";
     std::string s = utils::execProgram("xbps-query", {"-p", "installed_size", m_pkg.name});
     if (s.empty() || s.find("not found") != std::string::npos) return "Unknown";
     return s;
@@ -66,6 +67,7 @@ std::string Kernel::size() const {
 
 std::string Kernel::installDate() const {
     if (m_pkg.type == "manual" || m_pkg.type == "vkpurge") return "N/A";
+    if (!m_pkg.is_installed) return "N/A";
     std::string d = utils::execProgram("xbps-query", {"-p", "install-date", m_pkg.name});
     if (d.empty() || d.find("not found") != std::string::npos) return "N/A";
     return d;
@@ -174,8 +176,8 @@ std::vector<Kernel> Kernel::getKernels() {
         if (name.rfind("kernel-", 0) == 0) return true;
         if (name.rfind("linux-manual-", 0) == 0 || name.rfind("linux-orphan-", 0) == 0) return true;
 
-        if (name.size() > 5 && std::isdigit(name[5])) return true;
-        if (name.rfind("linux-", 0) == 0 && name.size() > 6 && std::isdigit(name[6])) return true;
+        if (name.size() > 5 && std::isdigit(static_cast<unsigned char>(name[5]))) return true;
+        if (name.rfind("linux-", 0) == 0 && name.size() > 6 && std::isdigit(static_cast<unsigned char>(name[6]))) return true;
         if (name.rfind("linux-", 0) == 0) return true;
 
         return false;
@@ -223,7 +225,7 @@ std::vector<Kernel> Kernel::getKernels() {
         // Si el paquete real concreto (ej. linux6.18) ya está instalado, evitar listar el metapaquete duplicado.
         if (installedPkgs.count("linux")) {
             for (const auto &p : installedPkgs) {
-                if (p.first != "linux" && p.first.rfind("linux", 0) == 0 && p.first.size() > 5 && std::isdigit(p.first[5])) {
+                if (p.first != "linux" && p.first.rfind("linux", 0) == 0 && p.first.size() > 5 && std::isdigit(static_cast<unsigned char>(p.first[5]))) {
                     installedPkgs.erase("linux");
                     break;
                 }
@@ -238,15 +240,17 @@ std::vector<Kernel> Kernel::getKernels() {
     }
 
     // Fase 2: escaneo de /boot para resolución de releases reales y detección de huérfanos
+    std::error_code fsEc;
     std::filesystem::path bootPath("/boot");
-    if (std::filesystem::exists(bootPath) && std::filesystem::is_directory(bootPath)) {
-        for (const auto &entry : std::filesystem::directory_iterator(bootPath)) {
-            if (!entry.is_regular_file() && !entry.is_symlink()) continue;
+    if (std::filesystem::exists(bootPath, fsEc) && std::filesystem::is_directory(bootPath, fsEc)) {
+        for (const auto &entry : std::filesystem::directory_iterator(bootPath, fsEc)) {
+            if (fsEc) break;
+            if (!entry.is_regular_file(fsEc) && !entry.is_symlink(fsEc)) continue;
             std::string filename = entry.path().filename().string();
             if (filename.rfind("vmlinuz-", 0) != 0) continue;
             std::string version = filename.substr(std::string("vmlinuz-").size());
             if (version.empty() || version == "old" || version.rfind(".old") != std::string::npos || version.rfind(".bak") != std::string::npos) continue;
-            if (!std::isdigit(version[0])) continue;
+            if (!std::isdigit(static_cast<unsigned char>(version[0]))) continue;
 
             std::string ownerPkg = getOwnerPackage(entry.path().string());
             if (!ownerPkg.empty() && isKernelPackage(ownerPkg)) {
@@ -268,14 +272,15 @@ std::vector<Kernel> Kernel::getKernels() {
 
     // Fase 3: escaneo de /usr/lib/modules (o /lib/modules)
     std::filesystem::path modulesPath("/usr/lib/modules");
-    if (!std::filesystem::exists(modulesPath)) {
+    if (!std::filesystem::exists(modulesPath, fsEc)) {
         modulesPath = "/lib/modules";
     }
-    if (std::filesystem::exists(modulesPath) && std::filesystem::is_directory(modulesPath)) {
-        for (const auto &entry : std::filesystem::directory_iterator(modulesPath)) {
-            if (!entry.is_directory()) continue;
+    if (std::filesystem::exists(modulesPath, fsEc) && std::filesystem::is_directory(modulesPath, fsEc)) {
+        for (const auto &entry : std::filesystem::directory_iterator(modulesPath, fsEc)) {
+            if (fsEc) break;
+            if (!entry.is_directory(fsEc)) continue;
             std::string version = entry.path().filename().string();
-            if (version.empty() || !std::isdigit(version[0])) continue;
+            if (version.empty() || !std::isdigit(static_cast<unsigned char>(version[0]))) continue;
             if (knownVersions.count(version)) continue;
 
             std::string ownerPkg;
@@ -351,7 +356,7 @@ std::vector<Kernel> Kernel::getKernels() {
             if (pkg_name == "linux") {
                 bool hasSeries = false;
                 for (const auto &kn : knownNames) {
-                    if (kn != "linux" && kn.rfind("linux", 0) == 0 && kn.size() > 5 && std::isdigit(kn[5])) {
+                    if (kn != "linux" && kn.rfind("linux", 0) == 0 && kn.size() > 5 && std::isdigit(static_cast<unsigned char>(kn[5]))) {
                         hasSeries = true;
                         break;
                     }
