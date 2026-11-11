@@ -26,3 +26,10 @@ target_link_libraries(neko-kernel-manager PRIVATE
     Qt6::Concurrent
 )
 
+include(GNUInstallDirs)
+install(TARGETS neko-kernel-manager DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(PROGRAMS helper/neko-kernel-helper DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/neko-kernel-manager)
+install(FILES policy/org.nekovoid.NekoKernelManager.policy DESTINATION ${CMAKE_INSTALL_DATADIR}/polkit-1/actions)
+install(FILES neko-kernel-manager.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+install(FILES Data/logo.png DESTINATION ${CMAKE_INSTALL_DATADIR}/pixmaps RENAME neko-kernel-manager.png)
+

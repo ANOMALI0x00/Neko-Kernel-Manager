@@ -2,12 +2,15 @@
 #define KERNEL_BRIDGE_HPP
 
 #include <QObject>
+#include <QProcess>
 #include <QStringList>
 #include <QVariantList>
+#include <functional>
 
 class KernelBridge : public QObject {
     Q_OBJECT
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
+    Q_PROPERTY(bool authenticated READ isAuthenticated NOTIFY authenticatedChanged)
     Q_PROPERTY(int progress READ progress NOTIFY progressChanged)
     Q_PROPERTY(QString statusMessage READ statusMessage WRITE setStatusMessage NOTIFY statusMessageChanged)
     Q_PROPERTY(bool statusIsError READ statusIsError NOTIFY statusMessageChanged)
@@ -30,6 +33,7 @@ public:
 
     Q_INVOKABLE void updateKernels();
     Q_INVOKABLE void installKernel(const QString &name);
+    Q_INVOKABLE void reconfigureKernel(const QString &name, const QString &type = "", const QString &version = "");
 
     // removeKernel: type y version son opcionales. Si no se pasan, la función los deduce.
     // - Si type == "manual", se asume kernel manual (basado en /boot).
@@ -37,6 +41,7 @@ public:
     Q_INVOKABLE void removeKernel(const QString &name, const QString &type = "", const QString &version = "");
 
     Q_INVOKABLE void vkpurge();
+    Q_INVOKABLE QString getVkpurgeList();
 
     // DKMS Management
     Q_INVOKABLE void updateDkmsModules();
@@ -56,8 +61,17 @@ public:
     void setVerbose(bool v) { m_verbose = v; }
     bool verbose() const { return m_verbose; }
 
+    void setLogPalette(const QString &errorColor,
+                       const QString &successColor,
+                       const QString &warningColor,
+                       const QString &infoColor);
+
     bool busy() const { return m_busy; }
+    bool isAuthenticated() const { return m_authenticated; }
     int progress() const { return m_progress; }
+
+    Q_INVOKABLE void startPrivilegedSession();
+    Q_INVOKABLE void shutdownPrivilegedSession();
 
     QString logs() const { return m_logs; }
     void appendLog(const QString &line);
@@ -70,6 +84,7 @@ public:
 
 signals:
     void busyChanged();
+    void authenticatedChanged();
     void progressChanged();
     void operationFinished(const QString &message);
     void kernelsChanged();
@@ -88,9 +103,6 @@ private:
     QVariantList m_dkmsCache;
     QString m_defaultKernel;
 
-    QVariantList getKernels();
-    QVariantList getDkmsModulesInternal();
-    QString getDefaultKernelInternal();
     void setBusy(bool b);
     void setProgress(int p) { if(m_progress != p) { m_progress = p; emit progressChanged(); } }
 
@@ -99,6 +111,31 @@ private:
 
     // Modo verbose para depuración avanzada
     bool m_verbose = false;
+
+    // Colores semánticos del visor de logs (inyectados desde ThemeManager)
+    QString m_logErrorColor = QStringLiteral("#ff5555");
+    QString m_logSuccessColor = QStringLiteral("#50fa7b");
+    QString m_logWarningColor = QStringLiteral("#f1fa8c");
+    QString m_logInfoColor = QStringLiteral("#bd93f9");
+
+    // Sesión privilegiada persistente (pkexec helper daemon sobre pipe privado)
+    QProcess *m_helperProcess = nullptr;
+    QString m_sessionNonce;
+    QByteArray m_stdoutBuffer;
+    QByteArray m_stderrBuffer;
+    bool m_authenticated = false;
+    bool m_helperStarting = false;
+    bool m_commandInFlight = false;
+    bool m_destroying = false;
+    quint64 m_kernelScanGen = 0;
+    quint64 m_dkmsScanGen = 0;
+    std::function<void(int)> m_activeCallback;
+    QStringList m_pendingArgs;
+    std::function<void(int)> m_pendingCallback;
+
+    QString resolveHelperPath() const;
+    void sendHelperCommand(const QStringList &args, std::function<void(int)> callback);
+    void runPrivilegedAction(const QStringList &args, std::function<void(int)> callback);
 
     Q_DISABLE_COPY_MOVE(KernelBridge)
 };

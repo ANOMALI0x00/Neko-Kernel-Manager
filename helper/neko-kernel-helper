@@ -1,0 +1,401 @@
+#!/bin/bash
+# neko-kernel-helper: Helper privilegiado ejecutado via pkexec
+# Provee operaciones seguras de sistema para Neko Kernel Manager en Void Linux
+
+set -euo pipefail
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+umask 022
+
+# Funciones de validación estricta (Sanitización contra inyección y traversal)
+validate_pkg_name() {
+    local pkg="$1"
+    if [[ ! "$pkg" =~ ^[a-zA-Z0-9_#+.-]+$ ]] || [[ "$pkg" == -* ]]; then
+        echo "Error de seguridad: Nombre de paquete inválido o potencialmente peligroso: '$pkg'" >&2
+        return 1
+    fi
+    return 0
+}
+
+validate_version() {
+    local ver="$1"
+    if [[ ! "$ver" =~ ^[a-zA-Z0-9_.-]+$ ]] || [[ "$ver" == -* ]] || [[ "$ver" == *".."* ]] || [[ "$ver" == *"/"* ]]; then
+        echo "Error de seguridad: Versión inválida o potencialmente peligrosa: '$ver'" >&2
+        return 1
+    fi
+    return 0
+}
+
+ensure_not_running_version() {
+    local ver="$1"
+    local running
+    running="$(uname -r 2>/dev/null || true)"
+    if [ -n "$running" ] && [ "$ver" = "$running" ]; then
+        echo "Error de seguridad: No se puede eliminar el kernel actualmente en ejecución ($running)." >&2
+        return 1
+    fi
+    return 0
+}
+
+execute_action() {
+    local ACTION="${1:-}"
+    shift || true
+
+    case "$ACTION" in
+        install-kernel)
+            local PKG="${1:-}"
+            local HEADERS="${2:-}"
+            validate_pkg_name "$PKG"
+            if [ -n "$HEADERS" ]; then
+                validate_pkg_name "$HEADERS"
+            fi
+
+            echo "Instalando kernel: $PKG"
+            xbps-install -y "$PKG"
+            if [ -n "$HEADERS" ]; then
+                echo "Instalando paquetes de cabeceras: $HEADERS"
+                xbps-install -y "$HEADERS" || true
+            fi
+            ;;
+
+        remove-kernel)
+            if [ $# -eq 0 ]; then
+                echo "Error: Paquetes no especificados." >&2
+                return 1
+            fi
+            local running_kernel owner_pkg owner_name
+            running_kernel="$(uname -r 2>/dev/null || true)"
+            owner_pkg=""
+            if [ -n "$running_kernel" ] && command -v xbps-query >/dev/null 2>&1; then
+                owner_pkg="$(xbps-query -o "/boot/vmlinuz-${running_kernel}" 2>/dev/null | head -n 1 | cut -d: -f1 || true)"
+                if [ -z "$owner_pkg" ]; then
+                    owner_pkg="$(xbps-query -o "/usr/lib/modules/${running_kernel}/modules.dep" 2>/dev/null | head -n 1 | cut -d: -f1 || true)"
+                fi
+            fi
+            owner_name="${owner_pkg%-*}"
+
+            for pkg in "$@"; do
+                validate_pkg_name "$pkg"
+                if [ -n "$owner_name" ] && [ "$pkg" = "$owner_name" ]; then
+                    echo "Error de seguridad: No se puede desinstalar el paquete propietario del kernel activo ($owner_pkg)." >&2
+                    return 1
+                fi
+            done
+
+            echo "Eliminando kernel(s): $*"
+            xbps-remove -Rfy "$@" || xbps-remove -RFy "$@"
+            ;;
+
+        reconfigure-kernel)
+            local PKG="${1:-}"
+            validate_pkg_name "$PKG"
+            echo "Reconfigurando kernel: $PKG"
+            xbps-reconfigure -f "$PKG"
+            ;;
+
+        reconfigure-manual)
+            local NAME="${1:-}"
+            local VER="${2:-$NAME}"
+            validate_pkg_name "$NAME"
+            validate_version "$VER"
+
+            echo "Reconfigurando manualmente kernel: $NAME ($VER)"
+            if [ -x /etc/kernel.d/post-install/10-dkms ]; then
+                /etc/kernel.d/post-install/10-dkms "$NAME" "$VER"
+            fi
+            if command -v dracut >/dev/null 2>&1; then
+                dracut --force "/boot/initramfs-${VER}.img" "$VER"
+            fi
+            if command -v grub-mkconfig >/dev/null 2>&1; then
+                grub-mkconfig -o /boot/grub/grub.cfg || true
+            fi
+            ;;
+
+        vkpurge-rm)
+            local VER="${1:-}"
+            validate_version "$VER"
+            ensure_not_running_version "$VER"
+
+            echo "Purgando versión antigua con vkpurge: $VER"
+            vkpurge rm "$VER" || {
+                echo "vkpurge falló; limpiando archivos residuales en /boot y /lib/modules..."
+                rm -f "/boot/vmlinuz-${VER}" "/boot/initramfs-${VER}.img" "/boot/initrd.img-${VER}" \
+                      "/boot/config-${VER}" "/boot/System.map-${VER}" \
+                      "/boot/vmlinuz-${VER}.old" "/boot/initramfs-${VER}.old.img"
+                rm -rf "/usr/lib/modules/${VER}" "/lib/modules/${VER}"
+                if command -v grub-mkconfig >/dev/null 2>&1; then
+                    grub-mkconfig -o /boot/grub/grub.cfg || true
+                fi
+            }
+            ;;
+
+        vkpurge-rm-all)
+            echo "Purgando todos los kernels no utilizados con vkpurge..."
+            vkpurge rm all
+            if command -v grub-mkconfig >/dev/null 2>&1; then
+                grub-mkconfig -o /boot/grub/grub.cfg || true
+            fi
+            ;;
+
+        manual-remove)
+            local VER="${1:-}"
+            validate_version "$VER"
+            ensure_not_running_version "$VER"
+
+            echo "Eliminando archivos del kernel manual: $VER"
+            rm -f "/boot/vmlinuz-${VER}" "/boot/initramfs-${VER}.img" "/boot/initrd.img-${VER}" \
+                  "/boot/config-${VER}" "/boot/System.map-${VER}" \
+                  "/boot/vmlinuz-${VER}.old" "/boot/initramfs-${VER}.old.img"
+            rm -rf "/usr/lib/modules/${VER}" "/lib/modules/${VER}"
+            if command -v grub-mkconfig >/dev/null 2>&1; then
+                grub-mkconfig -o /boot/grub/grub.cfg || true
+            fi
+            ;;
+
+        set-default-kernel)
+            local TARGET_VER="${1:-}"
+            validate_version "$TARGET_VER"
+            echo "Configurando kernel por defecto en GRUB: $TARGET_VER"
+
+            if [ ! -f /etc/default/grub ]; then
+                echo "Error: No se encontró /etc/default/grub." >&2
+                return 1
+            fi
+
+            # 1. Asegurar GRUB_DEFAULT=saved en /etc/default/grub y detectar si cambió
+            local NEED_MKCONFIG=0
+            local PREV_DEFAULT
+            PREV_DEFAULT=$(grep -E '^[[:space:]]*GRUB_DEFAULT=' /etc/default/grub | head -n 1 | cut -d= -f2- | tr -d '"'\''[:space:]' || true)
+            if [ "$PREV_DEFAULT" != "saved" ]; then
+                NEED_MKCONFIG=1
+            fi
+            if grep -Eq '^#?[[:space:]]*GRUB_DEFAULT=' /etc/default/grub; then
+                sed -i -E 's/^#?[[:space:]]*GRUB_DEFAULT=.*/GRUB_DEFAULT=saved/' /etc/default/grub
+            else
+                echo 'GRUB_DEFAULT=saved' >> /etc/default/grub
+            fi
+
+            # 2. Localizar archivo de configuración de GRUB
+            local GRUB_CFG=""
+            for path in /boot/grub/grub.cfg /boot/grub2/grub.cfg; do
+                if [ -f "$path" ]; then
+                    GRUB_CFG="$path"
+                    break
+                fi
+            done
+            if [ -z "$GRUB_CFG" ]; then
+                GRUB_CFG="/boot/grub/grub.cfg"
+                NEED_MKCONFIG=1
+            elif ! grep -q 'saved_entry' "$GRUB_CFG" 2>/dev/null; then
+                NEED_MKCONFIG=1
+            fi
+
+            find_grub_entry() {
+                local cfg="$1"
+                local kver="$2"
+                [ -f "$cfg" ] || return 0
+                awk -v kver="$kver" '
+                    BEGIN { depth = 0; cur_sub = ""; sub_depth = -1 }
+                    {
+                        line = $0
+                        if (line ~ /^[[:space:]]*submenu[[:space:]]/ && match(line, /['\''"][^'\''"]+['\''"]/)) {
+                            cur_sub = substr(line, RSTART + 1, RLENGTH - 2)
+                            sub_depth = depth
+                        }
+                        if (line ~ /^[[:space:]]*menuentry[[:space:]]/ && tolower(line) !~ /recovery/ && match(line, /['\''"][^'\''"]+['\''"]/)) {
+                            entry = substr(line, RSTART + 1, RLENGTH - 2)
+                            idx = index(entry, kver)
+                            if (idx > 0) {
+                                before_ok = (idx == 1) || (substr(entry, idx - 1, 1) ~ /[^[:alnum:]._-]/)
+                                after_pos = idx + length(kver)
+                                after_ok = (after_pos > length(entry)) || (substr(entry, after_pos, 1) ~ /[^[:alnum:]._-]/)
+                                if (before_ok && after_ok) {
+                                    if (cur_sub != "") {
+                                        print cur_sub ">" entry
+                                    } else {
+                                        print entry
+                                    }
+                                    exit
+                                }
+                            }
+                        }
+                        n_open = gsub(/\{/, "{", line)
+                        n_close = gsub(/\}/, "}", line)
+                        depth += n_open - n_close
+                        if (sub_depth >= 0 && n_close > 0 && depth <= sub_depth) {
+                            cur_sub = ""
+                            sub_depth = -1
+                        }
+                    }
+                ' "$cfg"
+            }
+
+            if [ "$NEED_MKCONFIG" -eq 1 ] && command -v grub-mkconfig >/dev/null 2>&1; then
+                echo "Actualizando $GRUB_CFG para habilitar GRUB_DEFAULT=saved..."
+                grub-mkconfig -o "$GRUB_CFG"
+            fi
+
+            local FOUND=""
+            FOUND=$(find_grub_entry "$GRUB_CFG" "$TARGET_VER")
+            if [ -z "$FOUND" ] && [ "$NEED_MKCONFIG" -eq 0 ] && command -v grub-mkconfig >/dev/null 2>&1; then
+                echo "Entrada no encontrada en $GRUB_CFG; regenerando configuración de GRUB..."
+                grub-mkconfig -o "$GRUB_CFG"
+                FOUND=$(find_grub_entry "$GRUB_CFG" "$TARGET_VER")
+            fi
+
+            if [ -z "$FOUND" ]; then
+                echo "Error: No se encontró una entrada válida en $GRUB_CFG para el kernel $TARGET_VER." >&2
+                return 1
+            fi
+            local ACTUAL_ENTRY="$FOUND"
+
+            # 3. Aplicar con grub-editenv
+            local GRUB_ENV=""
+            for path in /boot/grub/grubenv /boot/grub2/grubenv; do
+                if [ -f "$path" ]; then
+                    GRUB_ENV="$path"
+                    break
+                fi
+            done
+
+            local GRUB_EDITENV=""
+            for cmd in grub-editenv grub2-editenv; do
+                if command -v "$cmd" >/dev/null 2>&1; then
+                    GRUB_EDITENV="$cmd"
+                    break
+                fi
+            done
+
+            if [ -z "$GRUB_EDITENV" ]; then
+                echo "Error: No se encontró grub-editenv ni grub2-editenv." >&2
+                return 1
+            fi
+
+            if [ -n "$GRUB_ENV" ]; then
+                "$GRUB_EDITENV" "$GRUB_ENV" set saved_entry="$ACTUAL_ENTRY"
+            else
+                "$GRUB_EDITENV" - set saved_entry="$ACTUAL_ENTRY"
+            fi
+            echo "Kernel por defecto establecido exitosamente a: $ACTUAL_ENTRY"
+            ;;
+
+        dkms-install)
+            local MODULE="${1:-}"
+            local VER="${2:-}"
+            local KVER="${3:-}"
+            validate_pkg_name "$MODULE"
+            validate_version "$VER"
+            validate_version "$KVER"
+
+            echo "Instalando módulo DKMS: $MODULE $VER para kernel $KVER"
+            dkms install -m "$MODULE" -v "$VER" -k "$KVER"
+            if command -v dracut >/dev/null 2>&1; then
+                echo "Regenerando initramfs con Dracut..."
+                dracut --force "/boot/initramfs-${KVER}.img" "$KVER" || true
+            fi
+            ;;
+
+        dkms-remove)
+            local MODULE="${1:-}"
+            local VER="${2:-}"
+            local KVER="${3:-}"
+            validate_pkg_name "$MODULE"
+            validate_version "$VER"
+            if [ -n "$KVER" ]; then
+                validate_version "$KVER"
+                echo "Eliminando módulo DKMS: $MODULE $VER para kernel $KVER"
+                dkms remove -m "$MODULE" -v "$VER" -k "$KVER"
+            else
+                echo "Eliminando módulo DKMS: $MODULE $VER (todas las versiones)"
+                dkms remove -m "$MODULE" -v "$VER" --all
+            fi
+            ;;
+
+        dkms-autoinstall)
+            local KVER="${1:-}"
+            validate_version "$KVER"
+
+            echo "Autoinstalando módulos DKMS para kernel activo: $KVER"
+            dkms autoinstall -k "$KVER"
+            if command -v dracut >/dev/null 2>&1; then
+                echo "Regenerando initramfs con Dracut..."
+                dracut --force "/boot/initramfs-${KVER}.img" "$KVER" || true
+            fi
+            ;;
+
+        nvidia-dkms-install)
+            local MODULE="${1:-}"
+            local VER="${2:-}"
+            validate_pkg_name "$MODULE"
+            if [[ "$MODULE" != nvidia* ]]; then
+                echo "Error de seguridad: Módulo NVIDIA DKMS inválido: '$MODULE'" >&2
+                return 1
+            fi
+            validate_version "$VER"
+            shift 2 || true
+            for k in "$@"; do
+                validate_version "$k"
+                echo "Forzando instalación DKMS de $MODULE ($VER) para kernel: $k"
+                dkms install -m "$MODULE" -v "$VER" -k "$k" || true
+                if command -v dracut >/dev/null 2>&1; then
+                    dracut --force "/boot/initramfs-${k}.img" "$k" || true
+                fi
+            done
+            ;;
+
+        *)
+            echo "Error: Acción no reconocida: $ACTION" >&2
+            return 1
+            ;;
+    esac
+}
+
+MODE="${1:-}"
+shift || true
+
+if [ "$MODE" = "--daemon" ]; then
+    # Mantener el pipe de comandos privado exclusivamente en FD 3; el nonce se lee
+    # por el pipe (nunca por argv en /proc/*/cmdline) y los subprocesos no heredan FD 3.
+    exec 3<&0
+    if ! IFS= read -r -u 3 NONCE; then
+        echo "Error de seguridad: Nonce de sesión ausente." >&2
+        exit 1
+    fi
+    NONCE="${NONCE%$'\r'}"
+    if [[ ! "$NONCE" =~ ^[a-fA-F0-9]{16,64}$ ]]; then
+        echo "Error de seguridad: Nonce de sesión inválido." >&2
+        exit 1
+    fi
+
+    echo "__NEKO_READY_${NONCE}__"
+
+    while IFS= read -r -u 3 line; do
+        [ -z "$line" ] && continue
+
+        IFS=$'\t' read -r -a CMD_PARTS <<< "$line"
+        CMD_ACTION="${CMD_PARTS[0]:-}"
+
+        if [ "$CMD_ACTION" = "quit" ]; then
+            break
+        fi
+
+        if [ "${#CMD_PARTS[@]}" -gt 32 ]; then
+            echo "Error de seguridad: Demasiados argumentos en el comando." >&2
+            echo "__NEKO_DONE_${NONCE}__:1"
+            continue
+        fi
+
+        set +e
+        (
+            set -euo pipefail
+            execute_action "${CMD_PARTS[@]}"
+        ) </dev/null 3<&- 2>&1
+        rc=$?
+        set -e
+        echo "__NEKO_DONE_${NONCE}__:${rc}"
+    done
+
+    exec 3<&-
+    exit 0
+else
+    execute_action "$MODE" "$@"
+fi

@@ -2,10 +2,13 @@
 #include "utils.hpp"
 
 #include <filesystem>
+#include <future>
 #include <sstream>
 #include <set>
 #include <map>
 #include <algorithm>
+#include <cstdint>
+#include <cctype>
 
 Kernel::Kernel(Package pkg, Package headers) : m_pkg(pkg), m_headers(headers) {}
 
@@ -21,38 +24,52 @@ bool Kernel::has_files() const {
     return m_pkg.has_files;
 }
 
-bool Kernel::install() {
-    // La lógica real está en KernelBridge::installKernel
-    return true;
-}
-
-bool Kernel::remove() {
-    // La lógica real está en KernelBridge::removeKernel
-    return true;
-}
-
 std::string Kernel::category() const {
-    if (m_pkg.type == "manual" || 
-        m_pkg.name.find("linux-neko") != std::string::npos ||
-        m_pkg.name.find("linux-cachy-void") != std::string::npos) return "Custom";
+    if (m_pkg.type == "vkpurge") return "Orphan / Obsolete";
+    if (m_pkg.name.find("bore") != std::string::npos) return "BORE";
     if (m_pkg.name.find("lts") != std::string::npos) return "Longterm";
     if (m_pkg.name.find("rt") != std::string::npos) return "Realtime";
     if (m_pkg.name.find("zen") != std::string::npos) return "Zen";
     if (m_pkg.name.find("hardened") != std::string::npos) return "Hardened";
     if (m_pkg.name.find("mainline") != std::string::npos) return "Mainline";
+    if (m_pkg.type == "manual" || 
+        m_pkg.name.find("linux-neko") != std::string::npos ||
+        m_pkg.name.find("kernel-neko") != std::string::npos ||
+        m_pkg.name.find("linux-cachy-void") != std::string::npos) return "Custom";
     return "Stable";
 }
 
 std::string Kernel::size() const {
-    if (m_pkg.type == "manual") return "Unknown";
-    std::string s = utils::exec("xbps-query -p installed_size " + m_pkg.name);
+    if (m_pkg.type == "manual" || m_pkg.type == "vkpurge") {
+        std::uintmax_t totalBytes = 0;
+        const std::vector<std::string> files = {
+            "/boot/vmlinuz-" + m_pkg.version,
+            "/boot/initramfs-" + m_pkg.version + ".img",
+            "/boot/initrd.img-" + m_pkg.version,
+            "/boot/System.map-" + m_pkg.version,
+            "/boot/config-" + m_pkg.version
+        };
+        std::error_code ec;
+        for (const auto &path : files) {
+            if (std::filesystem::exists(path, ec) && std::filesystem::is_regular_file(path, ec)) {
+                totalBytes += std::filesystem::file_size(path, ec);
+            }
+        }
+        if (totalBytes == 0) return "Unknown";
+        const std::uintmax_t mb = totalBytes / (1024 * 1024);
+        if (mb > 0) return std::to_string(mb) + "MB";
+        return std::to_string(totalBytes / 1024) + "KB";
+    }
+    if (!m_pkg.is_installed) return "Unknown";
+    std::string s = utils::execProgram("xbps-query", {"-p", "installed_size", m_pkg.name});
     if (s.empty() || s.find("not found") != std::string::npos) return "Unknown";
     return s;
 }
 
 std::string Kernel::installDate() const {
-    if (m_pkg.type == "manual") return "N/A";
-    std::string d = utils::exec("xbps-query -p install-date " + m_pkg.name);
+    if (m_pkg.type == "manual" || m_pkg.type == "vkpurge") return "N/A";
+    if (!m_pkg.is_installed) return "N/A";
+    std::string d = utils::execProgram("xbps-query", {"-p", "install-date", m_pkg.name});
     if (d.empty() || d.find("not found") != std::string::npos) return "N/A";
     return d;
 }
@@ -80,15 +97,65 @@ std::vector<Kernel> Kernel::getKernels() {
     std::map<std::string, std::string> installedPkgs; // nombre -> pkgver (estado del paquete)
     std::map<std::string, std::string> diskVersions;  // paquete -> release real encontrada en disco
     std::map<std::string, bool> manualCandidates;     // version -> tiene vmlinuz en /boot
+    std::map<std::string, bool> vkpurgeCandidates;    // version -> huérfano detectado por vkpurge
+
+    // Consultar kernels antiguos rastreados por vkpurge
+    std::set<std::string> vkpurgeSet;
+    if (utils::commandExists("vkpurge")) {
+        std::string vkOut = utils::execProgram("vkpurge", {"list"});
+        std::vector<std::string> vkLines = utils::split(vkOut, '\n');
+        for (const auto &vkLine : vkLines) {
+            std::string t = utils::trim(vkLine);
+            if (!t.empty() && std::isdigit(static_cast<unsigned char>(t[0]))) {
+                vkpurgeSet.insert(t);
+            }
+        }
+    }
+
+    auto fastKernelRepo = [](const std::string &pkgName) -> std::string {
+        if (pkgName.rfind("kernel-neko", 0) == 0 || pkgName.rfind("linux-neko", 0) == 0) {
+            return "Neko Void";
+        }
+        if (pkgName.rfind("linux-cachy", 0) == 0) {
+            return "CachyOS / Void";
+        }
+        if (!utils::commandExists("xbps-query")) {
+            return "System";
+        }
+        return "";
+    };
+
+    auto queryKernelRepo = [](const std::string &pkgName, bool installed) -> std::string {
+        std::string rawRepo = installed
+            ? utils::execProgram("xbps-query", {"-p", "repository", pkgName})
+            : utils::execProgram("xbps-query", {"-R", "-p", "repository", pkgName});
+        std::string repoUrl = utils::trim(rawRepo);
+        if (repoUrl.find("neko-void") != std::string::npos || repoUrl.find("sourceforge.net") != std::string::npos) {
+            return "Neko Void";
+        }
+        if (repoUrl.find("voidlinux.org") != std::string::npos) {
+            return "Void Official";
+        }
+        if (repoUrl.rfind("/", 0) == 0 || repoUrl.rfind("file:", 0) == 0) {
+            return "Local Repo";
+        }
+        if (!repoUrl.empty()) {
+            return repoUrl;
+        }
+        return "Void Repository";
+    };
 
     auto isKernelPackage = [](const std::string &name) -> bool {
-        if (name.rfind("linux", 0) != 0) return false;
+        bool isLinux = (name.rfind("linux", 0) == 0);
+        bool isKernel = (name.rfind("kernel-", 0) == 0);
+        if (!isLinux && !isKernel) return false;
 
         static const std::vector<std::string> excludedNames = {
             "linux-api-headers", "linux-firmware", "linux-libre", "linux-base",
             "linux-user", "linux-atm", "linux-utils", "linux-gpib", "linux-pam",
             "linux-container", "linux-kmod", "linux-driver-management",
-            "linux-driver-management-32bit", "linux-vt-setcolors", "linux-wifi-hotspot"
+            "linux-driver-management-32bit", "linux-vt-setcolors", "linux-wifi-hotspot",
+            "kernel-libc-headers"
         };
         for (const auto &excluded : excludedNames) {
             if (name == excluded) return false;
@@ -110,21 +177,35 @@ std::vector<Kernel> Kernel::getKernels() {
             if (name == allowed) return true;
         }
 
-        if (name.rfind("linux-neko", 0) == 0 || name.rfind("linux-cachy", 0) == 0) return true;
-        if (name.rfind("linux-manual-", 0) == 0) return true;
+        if (name.rfind("linux-neko", 0) == 0 || name.rfind("kernel-neko", 0) == 0 || name.rfind("linux-cachy", 0) == 0) return true;
+        if (name.rfind("kernel-", 0) == 0) return true;
+        if (name.rfind("linux-manual-", 0) == 0 || name.rfind("linux-orphan-", 0) == 0) return true;
 
-        if (name.size() > 5 && std::isdigit(name[5])) return true;
-        if (name.rfind("linux-", 0) == 0 && name.size() > 6 && std::isdigit(name[6])) return true;
+        if (name.size() > 5 && std::isdigit(static_cast<unsigned char>(name[5]))) return true;
+        if (name.rfind("linux-", 0) == 0 && name.size() > 6 && std::isdigit(static_cast<unsigned char>(name[6]))) return true;
+        if (name.rfind("linux-", 0) == 0) return true;
 
         return false;
     };
 
-    // Devuelve el nombre del paquete propietario de un archivo. Primero intenta
-    // casar "nombre-version" exacto contra los paquetes instalados (soporta pkgvers
-    // con guiones); si no, cae al split en el último guión.
-    auto getOwnerPackage = [&installedPkgs](const std::string &filePath) -> std::string {
+    // Caché rápida de archivos propiedad de paquetes de kernel instalados (evita múltiples xbps-query -o)
+    std::map<std::string, std::string> fileOwnerCache;
+
+    // Devuelve el nombre del paquete propietario de un archivo
+    auto getOwnerPackage = [&installedPkgs, &fileOwnerCache](const std::string &filePath) -> std::string {
+        auto cachedIt = fileOwnerCache.find(filePath);
+        if (cachedIt != fileOwnerCache.end()) {
+            return cachedIt->second;
+        }
+        if (filePath.rfind("/lib/modules/", 0) == 0) {
+            const std::string usrPath = "/usr" + filePath;
+            auto usrIt = fileOwnerCache.find(usrPath);
+            if (usrIt != fileOwnerCache.end()) {
+                return usrIt->second;
+            }
+        }
         if (!utils::commandExists("xbps-query")) return "";
-        std::string res = utils::exec("xbps-query -o " + filePath);
+        std::string res = utils::execProgram("xbps-query", {"-o", filePath});
         if (res.empty() || res.find("not owned") != std::string::npos || res.find("No such file") != std::string::npos) return "";
         size_t colon_pos = res.find(':');
         if (colon_pos == std::string::npos) return "";
@@ -137,17 +218,16 @@ std::vector<Kernel> Kernel::getKernels() {
         return full_pkg.substr(0, hyphen_pos);
     };
 
-    // Fase 1: estado de paquetes instalados. La condición "instalado" depende del
-    // NOMBRE del paquete listado por xbps-query -l, nunca de la existencia de archivos.
+    // Fase 1: estado de paquetes instalados. Solo se aceptan paquetes con estado 'ii'
     if (utils::commandExists("xbps-query")) {
-        std::string installedOutput = utils::exec("xbps-query -l");
+        std::string installedOutput = utils::execProgram("xbps-query", {"-l"});
         std::vector<std::string> installedLines = utils::split(installedOutput, '\n');
         for (const auto &line : installedLines) {
             if (line.size() < 4) continue;
             std::istringstream iss(line);
             std::string status, full_pkg;
             iss >> status >> full_pkg;
-            if (full_pkg.empty()) continue;
+            if (full_pkg.empty() || status != "ii") continue;
 
             size_t hyphen_pos = full_pkg.find_last_of('-');
             if (hyphen_pos == std::string::npos || hyphen_pos == 0) continue;
@@ -159,45 +239,87 @@ std::vector<Kernel> Kernel::getKernels() {
                 installedPkgs[pkg_name] = version;
             }
         }
+
+        // En Void Linux, 'linux', 'linux-lts' y 'linux-mainline' son metapaquetes vacíos de conveniencia.
+        // Si el paquete real concreto (ej. linux6.18) ya está instalado, evitar listar el metapaquete duplicado.
+        if (installedPkgs.count("linux")) {
+            for (const auto &p : installedPkgs) {
+                if (p.first != "linux" && p.first.rfind("linux", 0) == 0 && p.first.size() > 5 && std::isdigit(static_cast<unsigned char>(p.first[5]))) {
+                    installedPkgs.erase("linux");
+                    break;
+                }
+            }
+        }
+        if (installedPkgs.count("linux-lts") && installedPkgs.count("linux6.12")) {
+            installedPkgs.erase("linux-lts");
+        }
+        if (installedPkgs.count("linux-mainline") && installedPkgs.count("linux7.3")) {
+            installedPkgs.erase("linux-mainline");
+        }
+
+        // Precargar en paralelo los archivos clave (/boot/vmlinuz-* y modules.dep) de los kernels instalados
+        std::vector<std::pair<std::string, std::future<std::string>>> fileFutures;
+        fileFutures.reserve(installedPkgs.size());
+        for (const auto &pair : installedPkgs) {
+            const std::string pkgName = pair.first;
+            fileFutures.emplace_back(pkgName, std::async(std::launch::async, [pkgName]() {
+                return utils::execProgram("xbps-query", {"-f", pkgName});
+            }));
+        }
+        for (auto &item : fileFutures) {
+            const std::string &pkgName = item.first;
+            const std::string filesOut = item.second.get();
+            for (const auto &fline : utils::split(filesOut, '\n')) {
+                if (fline.rfind("/boot/vmlinuz-", 0) == 0 ||
+                    (fline.size() > 12 && fline.compare(fline.size() - 12, 12, "/modules.dep") == 0)) {
+                    fileOwnerCache[fline] = pkgName;
+                }
+            }
+        }
     }
 
-    // Fase 2: escaneo de /boot. Para cada vmlinuz se resuelve su paquete propietario
-    // y se guarda la release real del kernel en disco (p. ej. 7.2.0-rt-neko+), que
-    // puede diferir del pkgver del paquete (p. ej. 7.2.0_2).
+    // Fase 2: escaneo de /boot para resolución de releases reales y detección de huérfanos
+    std::error_code fsEc;
     std::filesystem::path bootPath("/boot");
-    if (std::filesystem::exists(bootPath) && std::filesystem::is_directory(bootPath)) {
-        for (const auto &entry : std::filesystem::directory_iterator(bootPath)) {
-            if (!entry.is_regular_file() && !entry.is_symlink()) continue;
+    if (std::filesystem::exists(bootPath, fsEc) && std::filesystem::is_directory(bootPath, fsEc)) {
+        for (const auto &entry : std::filesystem::directory_iterator(bootPath, fsEc)) {
+            if (fsEc) break;
+            if (!entry.is_regular_file(fsEc) && !entry.is_symlink(fsEc)) continue;
             std::string filename = entry.path().filename().string();
             if (filename.rfind("vmlinuz-", 0) != 0) continue;
             std::string version = filename.substr(std::string("vmlinuz-").size());
             if (version.empty() || version == "old" || version.rfind(".old") != std::string::npos || version.rfind(".bak") != std::string::npos) continue;
-            if (!std::isdigit(version[0])) continue;
+            if (!std::isdigit(static_cast<unsigned char>(version[0]))) continue;
 
             std::string ownerPkg = getOwnerPackage(entry.path().string());
             if (!ownerPkg.empty() && isKernelPackage(ownerPkg)) {
                 if (!diskVersions.count(ownerPkg)) diskVersions[ownerPkg] = version;
                 manualCandidates.erase(version);
+                vkpurgeCandidates.erase(version);
                 continue;
             }
-            if (!knownVersions.count(version)) manualCandidates[version] = true;
+
+            if (!knownVersions.count(version)) {
+                if (vkpurgeSet.count(version)) {
+                    vkpurgeCandidates[version] = true;
+                } else {
+                    manualCandidates[version] = true;
+                }
+            }
         }
     }
 
-    // Fase 3: escaneo de /usr/lib/modules (o /lib/modules) para completar el mapa de
-    // paquetes instalados que el escaneo de /boot no haya cubierto. xbps-query -o no
-    // reporta directorios, así que se consulta un archivo habitual del directorio.
-    // Un directorio de módulos sin vmlinuz en /boot es solo un resto huérfano y NO
-    // se lista como kernel instalado.
+    // Fase 3: escaneo de /usr/lib/modules (o /lib/modules)
     std::filesystem::path modulesPath("/usr/lib/modules");
-    if (!std::filesystem::exists(modulesPath)) {
+    if (!std::filesystem::exists(modulesPath, fsEc)) {
         modulesPath = "/lib/modules";
     }
-    if (std::filesystem::exists(modulesPath) && std::filesystem::is_directory(modulesPath)) {
-        for (const auto &entry : std::filesystem::directory_iterator(modulesPath)) {
-            if (!entry.is_directory()) continue;
+    if (std::filesystem::exists(modulesPath, fsEc) && std::filesystem::is_directory(modulesPath, fsEc)) {
+        for (const auto &entry : std::filesystem::directory_iterator(modulesPath, fsEc)) {
+            if (fsEc) break;
+            if (!entry.is_directory(fsEc)) continue;
             std::string version = entry.path().filename().string();
-            if (version.empty() || !std::isdigit(version[0])) continue;
+            if (version.empty() || !std::isdigit(static_cast<unsigned char>(version[0]))) continue;
             if (knownVersions.count(version)) continue;
 
             std::string ownerPkg;
@@ -208,12 +330,20 @@ std::vector<Kernel> Kernel::getKernels() {
             if (!ownerPkg.empty() && isKernelPackage(ownerPkg)) {
                 if (!diskVersions.count(ownerPkg)) diskVersions[ownerPkg] = version;
                 manualCandidates.erase(version);
+                vkpurgeCandidates.erase(version);
             }
         }
     }
 
-    // Fase 4: emitir kernels instalados. "installed" proviene del estado del paquete;
-    // la versión mostrada es la release real en disco cuando se encontró.
+    struct KernelEntry {
+        Package pkg;
+        Package headers;
+        bool queryInstalledRepo = false;
+        bool needsRepoQuery = false;
+    };
+    std::vector<KernelEntry> entries;
+
+    // Fase 4: emitir kernels instalados
     for (const auto &pair : installedPkgs) {
         const std::string &pkg_name = pair.first;
         const std::string &pkgver = pair.second;
@@ -222,32 +352,35 @@ std::vector<Kernel> Kernel::getKernels() {
         if (it != diskVersions.end()) version = it->second;
 
         bool hasFiles = kernelFilesExist(version);
-        Package pkg{pkg_name, version, "void", "xbps", true, hasFiles};
-        Package headers{pkg_name + "-headers", pkgver, "void", "xbps", true, true};
-        kernels.emplace_back(pkg, headers);
+        std::string repoName = fastKernelRepo(pkg_name);
+        const bool needsQuery = repoName.empty();
+        if (needsQuery) repoName = "Void Repository";
+        Package pkg{pkg_name, version, repoName, "xbps", true, hasFiles};
+        Package headers{pkg_name + "-headers", pkgver, repoName, "xbps", true, true};
+        entries.push_back({pkg, headers, true, needsQuery});
         knownNames.insert(pkg_name);
         knownVersions.insert(version);
     }
 
-    // Fase 5: kernels presentes en disco (con dueño conocido) pero sin paquete instalado.
+    // Fase 5: kernels presentes en disco con dueño conocido pero sin paquete en installedPkgs
     for (const auto &pair : diskVersions) {
         if (installedPkgs.count(pair.first) || knownNames.count(pair.first)) continue;
         const std::string &pkg_name = pair.first;
         const std::string &version = pair.second;
         bool hasFiles = kernelFilesExist(version);
-        Package pkg{pkg_name, version, "void", "xbps", true, hasFiles};
-        Package headers{pkg_name + "-headers", version, "void", "xbps", true, true};
-        kernels.emplace_back(pkg, headers);
+        std::string repoName = fastKernelRepo(pkg_name);
+        const bool needsQuery = repoName.empty();
+        if (needsQuery) repoName = "Void Repository";
+        Package pkg{pkg_name, version, repoName, "xbps", true, hasFiles};
+        Package headers{pkg_name + "-headers", version, repoName, "xbps", true, true};
+        entries.push_back({pkg, headers, false, needsQuery});
         knownNames.insert(pkg_name);
         knownVersions.insert(version);
     }
 
-    // Fase 6: kernels disponibles en los repositorios pero no instalados.
+    // Fase 6: kernels disponibles en los repositorios configurados del sistema
     if (utils::commandExists("xbps-query")) {
-        std::string repoOutput;
-        repoOutput += utils::exec("xbps-query -Rs linux");
-        repoOutput += "\n" + utils::exec("xbps-query -Rs linux-neko");
-        repoOutput += "\n" + utils::exec("xbps-query -Rs linux-cachy-void");
+        std::string repoOutput = utils::execProgram("xbps-query", {"--regex", "-Rs", "^(linux|kernel-)"});
         std::vector<std::string> repoLines = utils::split(repoOutput, '\n');
 
         for (const auto &line_raw : repoLines) {
@@ -268,7 +401,18 @@ std::vector<Kernel> Kernel::getKernels() {
             if (!isKernelPackage(pkg_name)) continue;
             if (knownNames.count(pkg_name)) continue;
 
-            bool installed = installedPkgs.count(pkg_name) > 0;
+            if (pkg_name == "linux") {
+                bool hasSeries = false;
+                for (const auto &kn : knownNames) {
+                    if (kn != "linux" && kn.rfind("linux", 0) == 0 && kn.size() > 5 && std::isdigit(static_cast<unsigned char>(kn[5]))) {
+                        hasSeries = true;
+                        break;
+                    }
+                }
+                if (hasSeries) continue;
+            }
+
+            bool installed = (installedPkgs.count(pkg_name) > 0) || (status == "[*]");
             bool hasFiles = false;
             if (installed) {
                 std::string diskVer = version;
@@ -277,30 +421,81 @@ std::vector<Kernel> Kernel::getKernels() {
                 hasFiles = kernelFilesExist(diskVer);
             }
 
-            Package pkg{pkg_name, version, "void", "xbps", installed, hasFiles};
-            Package headers{pkg_name + "-headers", version, "void", "xbps", installed, true};
-            kernels.emplace_back(pkg, headers);
+            std::string repoName = fastKernelRepo(pkg_name);
+            const bool needsQuery = repoName.empty();
+            if (needsQuery) repoName = "Void Repository";
+            Package pkg{pkg_name, version, repoName, "xbps", installed, hasFiles};
+            Package headers{pkg_name + "-headers", version, repoName, "xbps", installed, true};
+            entries.push_back({pkg, headers, installed, needsQuery});
             knownNames.insert(pkg_name);
             knownVersions.insert(version);
         }
     }
 
-    // Fase 7: kernels que no pertenecen a ningún paquete (instalados a mano).
+    // Resolver repositorios pendientes en paralelo acotado (máx. 6 consultas concurrentes)
+    std::vector<size_t> pendingIndices;
+    for (size_t i = 0; i < entries.size(); ++i) {
+        if (entries[i].needsRepoQuery) {
+            pendingIndices.push_back(i);
+        }
+    }
+    constexpr size_t kMaxRepoWorkers = 6;
+    for (size_t offset = 0; offset < pendingIndices.size(); offset += kMaxRepoWorkers) {
+        const size_t batchEnd = std::min(offset + kMaxRepoWorkers, pendingIndices.size());
+        std::vector<std::future<std::string>> futures;
+        futures.reserve(batchEnd - offset);
+        for (size_t j = offset; j < batchEnd; ++j) {
+            const size_t idx = pendingIndices[j];
+            const std::string pkgName = entries[idx].pkg.name;
+            const bool installedFlag = entries[idx].queryInstalledRepo;
+            futures.push_back(std::async(std::launch::async, [queryKernelRepo, pkgName, installedFlag]() {
+                return queryKernelRepo(pkgName, installedFlag);
+            }));
+        }
+        for (size_t j = offset; j < batchEnd; ++j) {
+            const size_t idx = pendingIndices[j];
+            const std::string resolvedRepo = futures[j - offset].get();
+            entries[idx].pkg.repo = resolvedRepo;
+            entries[idx].headers.repo = resolvedRepo;
+        }
+    }
+
+    kernels.reserve(entries.size() + vkpurgeCandidates.size() + manualCandidates.size());
+    for (const auto &e : entries) {
+        kernels.emplace_back(e.pkg, e.headers);
+    }
+
+    // Fase 7: kernels obsoletos rastreados por vkpurge
+    for (const auto &candidate : vkpurgeCandidates) {
+        const std::string &version = candidate.first;
+        if (knownVersions.count(version)) continue;
+        std::string orphanName = "linux-orphan-" + version;
+        if (knownNames.count(orphanName)) continue;
+
+        Package pkg{orphanName, version, "System (vkpurge)", "vkpurge", true, candidate.second};
+        Package headers{"none", "none", "System (vkpurge)", "vkpurge", false, false};
+        kernels.emplace_back(pkg, headers);
+        knownNames.insert(orphanName);
+        knownVersions.insert(version);
+    }
+
+    // Fase 8: kernels instalados manualmente a mano en /boot
     for (const auto &candidate : manualCandidates) {
         const std::string &version = candidate.first;
         if (knownVersions.count(version)) continue;
         std::string manualName = "linux-manual-" + version;
         if (knownNames.count(manualName)) continue;
 
-        Package pkg{manualName, version, "local", "manual", true, candidate.second};
-        Package headers{"none", "none", "local", "manual", false, false};
+        Package pkg{manualName, version, "Local /boot", "manual", true, candidate.second};
+        Package headers{"none", "none", "Local /boot", "manual", false, false};
         kernels.emplace_back(pkg, headers);
         knownNames.insert(manualName);
         knownVersions.insert(version);
     }
 
     static const std::vector<std::string> priorityOrder = {
-        "linux-neko-rt", "linux-neko-zen", "linux-cachy-void", "linux-mainline", "linux-lts"
+        "kernel-neko-bore", "kernel-neko", "linux-neko-rt", "linux-neko-zen", "linux-neko-lts",
+        "linux-neko-rolling", "linux-neko", "linux-cachy-void", "linux-mainline", "linux-lts", "linux"
     };
     auto priority = [](const std::string &name) -> int {
         for (size_t i = 0; i < priorityOrder.size(); ++i) {
@@ -311,8 +506,12 @@ std::vector<Kernel> Kernel::getKernels() {
         return static_cast<int>(priorityOrder.size());
     };
 
+    // Primero los instalados, y luego por prioridad de distro
     std::stable_sort(kernels.begin(), kernels.end(),
         [&priority](const Kernel &a, const Kernel &b) {
+            if (a.is_installed() != b.is_installed()) {
+                return a.is_installed() > b.is_installed();
+            }
             return priority(a.name()) < priority(b.name());
         });
 
