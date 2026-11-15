@@ -18,7 +18,7 @@ validate_pkg_name() {
 
 validate_version() {
     local ver="$1"
-    if [[ ! "$ver" =~ ^[a-zA-Z0-9_.-]+$ ]] || [[ "$ver" == -* ]] || [[ "$ver" == *".."* ]] || [[ "$ver" == *"/"* ]]; then
+    if [[ ! "$ver" =~ ^[a-zA-Z0-9_+.-]+$ ]] || [[ "$ver" == -* ]] || [[ "$ver" == *".."* ]] || [[ "$ver" == *"/"* ]]; then
         echo "Error de seguridad: Versión inválida o potencialmente peligrosa: '$ver'" >&2
         return 1
     fi
@@ -142,9 +142,9 @@ find_grub_entry() {
                 entry = substr(line, RSTART + 1, RLENGTH - 2)
                 idx = index(entry, kver)
                 if (idx > 0) {
-                    before_ok = (idx == 1) || (substr(entry, idx - 1, 1) ~ /[^[:alnum:]._-]/)
+                    before_ok = (idx == 1) || (substr(entry, idx - 1, 1) ~ /[^[:alnum:]._+-]/)
                     after_pos = idx + length(kver)
-                    after_ok = (after_pos > length(entry)) || (substr(entry, after_pos, 1) ~ /[^[:alnum:]._-]/)
+                    after_ok = (after_pos > length(entry)) || (substr(entry, after_pos, 1) ~ /[^[:alnum:]._+-]/)
                     if (before_ok && after_ok) {
                         entry_id = extract_id(line)
                         ent_tok = (entry_id != "") ? entry_id : entry

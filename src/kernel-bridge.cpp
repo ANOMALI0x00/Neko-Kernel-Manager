@@ -60,7 +60,7 @@ static bool isValidPkgName(const QString &pkg) {
 }
 
 static bool isValidVersion(const QString &ver) {
-    static const QRegularExpression rx("^[a-zA-Z0-9_.-]+$");
+    static const QRegularExpression rx("^[a-zA-Z0-9_+.-]+$");
     return !ver.isEmpty() && !ver.startsWith('-') && !ver.contains("..") && !ver.contains('/') && rx.match(ver).hasMatch();
 }
 
